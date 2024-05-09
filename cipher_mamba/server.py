@@ -9,6 +9,9 @@ from einops import rearrange
 
 from transformers import AutoModelForCausalLM
 
+import sys
+sys.path.append("/home/slinevitable2003/Work/python_proj/mamba")
+
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 
 
@@ -37,10 +40,12 @@ print(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.re
 torch.random.manual_seed(0)
 
 import socket
-import pickle
 
 HOST = "127.0.0.1"
-PORT = 43210
+PORT = 43222
+
+from cipher_mamba.insecure_sharing.models import protocol
+from cipher_mamba.insecure_sharing.socket import BetterSocket
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.bind((HOST, PORT))
@@ -48,8 +53,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     print("Ready to receive the message now.")
     conn, addr = s.accept()
     with conn:
+        connn = BetterSocket(conn)
+        protocol.set_socket(s=connn, role="S")
+
         while True:
-            input_ids = pickle.loads(conn.recv(65536))
+            input_ids = connn.recv()
         
             # inference
             max_length = input_ids.shape[1] + args.genlen
@@ -67,10 +75,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 min_p=args.minp,
                 repetition_penalty=args.repetition_penalty,
             )
+            print("Going to generate...")
             out = fn()
+            protocol.synchronize('S', message="break")
             out_sequences = out.sequences
             out = out.sequences.tolist()
-            conn.sendall(pickle.dumps(out))
+            connn.sendall(out)
 
             torch.cuda.synchronize()
             start = time.time()

@@ -13,6 +13,7 @@ from torch import Tensor
 from torch.profiler import ProfilerActivity, profile, record_function
 from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput, TextStreamer
 
+from cipher_mamba.insecure_sharing.models import protocol
 
 @dataclass
 class InferenceParams:
@@ -149,27 +150,28 @@ def decode(
         sequences: (batch, max_length)
         scores: tuples of (batch, vocab_size)
     """
-    if streamer is not None:
-        streamer.put(input_ids.cpu())
+    # if streamer is not None:
+    #     streamer.put(input_ids.cpu())
 
     batch_size, seqlen_og = input_ids.shape
     teacher_output_len = teacher_outputs.shape[1] if teacher_outputs is not None else 0
-    if cg:
-        if not hasattr(model, "_decoding_cache"):
-            model._decoding_cache = None
-        model._decoding_cache = update_graph_cache(
-            model,
-            model._decoding_cache,
-            batch_size,
-            seqlen_og,
-            max_length,
-        )
-        inference_params = model._decoding_cache.inference_params
-        inference_params.reset(max_length, batch_size)
-    else:
-        inference_params = InferenceParams(max_seqlen=max_length, max_batch_size=batch_size)
+    # if cg:
+    #     if not hasattr(model, "_decoding_cache"):
+    #         model._decoding_cache = None
+    #     model._decoding_cache = update_graph_cache(
+    #         model,
+    #         model._decoding_cache,
+    #         batch_size,
+    #         seqlen_og,
+    #         max_length,
+    #     )
+    #     inference_params = model._decoding_cache.inference_params
+    #     inference_params.reset(max_length, batch_size)
+    # else:
+    inference_params = InferenceParams(max_seqlen=max_length, max_batch_size=batch_size)
 
     def get_logits(input_ids, inference_params):
+
         decoding = inference_params.seqlen_offset > 0
         if decoding:
             position_ids = torch.full(
@@ -180,17 +182,17 @@ def decode(
             )
         else:
             position_ids = None
-        if not cg or not decoding:
-            logits = model(
-                input_ids,
-                position_ids=position_ids,
-                inference_params=inference_params,
-                num_last_tokens=1,
-            ).logits.squeeze(dim=1)
-        else:
-            logits = model._decoding_cache.run(
-                input_ids, position_ids, inference_params.seqlen_offset
-            ).squeeze(dim=1)
+        # if not cg or not decoding:
+        logits = model(
+            input_ids,
+            position_ids=position_ids,
+            inference_params=inference_params,
+            num_last_tokens=1,
+        ).logits.squeeze(dim=1)
+        # else:
+        #     logits = model._decoding_cache.run(
+        #         input_ids, position_ids, inference_params.seqlen_offset
+        #     ).squeeze(dim=1)
         return logits[..., :vocab_size] if vocab_size is not None else logits
 
     def sample_tokens(logits, inference_params):
@@ -204,8 +206,8 @@ def decode(
     def should_stop(current_token, inference_params):
         if inference_params.seqlen_offset == 0:
             return False
-        if eos_token_id is not None and (current_token == eos_token_id).all():
-            return True
+        # if eos_token_id is not None and (current_token == eos_token_id).all():
+        #     return True
         if inference_params.seqlen_offset >= max_length - 1:
             return True
         return False
@@ -228,11 +230,12 @@ def decode(
             )
             sampled_tokens = sample_tokens(logits, inference_params)
             sequences_cat = torch.cat([sequences_cat, sampled_tokens], dim=1)
+        protocol.synchronize('S', message='onemore', token=sampled_tokens)
         sequences.append(sampled_tokens)
-        if streamer is not None:
-            streamer.put(sampled_tokens.cpu())
-    if streamer is not None:
-        streamer.end()
+        # if streamer is not None:
+        #     streamer.put(sampled_tokens.cpu())
+    # if streamer is not None:
+    #     streamer.end()
     if enable_timing:
         end.record()
         torch.cuda.synchronize()

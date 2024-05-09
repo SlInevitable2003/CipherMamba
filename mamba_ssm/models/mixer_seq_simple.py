@@ -20,6 +20,7 @@ try:
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
+from cipher_mamba.insecure_sharing.models import protocol
 
 def create_block(
     d_model,
@@ -149,7 +150,16 @@ class MixerModel(nn.Module):
         }
 
     def forward(self, input_ids, inference_params=None):
-        hidden_states = self.embedding(input_ids)
+        vocab_size = self.embedding.num_embeddings
+        W = self.embedding(torch.arange(vocab_size).reshape(1, 1, vocab_size).to('cuda'))
+        protocol.synchronize('S', message="embedding")
+        # true_hidden_states = self.embedding(input_ids)
+        hidden_states = protocol.insecure_embedding('S', W=W)
+        if inference_params.seqlen_offset > 0:
+            hidden_states = hidden_states[0][-1].reshape((1, 1, -1)).to(device='cuda', dtype=torch.float16)
+        # print(hidden_states)
+        # print(true_hidden_states)
+
         residual = None
         for layer in self.layers:
             hidden_states, residual = layer(
