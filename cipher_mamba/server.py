@@ -10,7 +10,8 @@ from einops import rearrange
 from transformers import AutoModelForCausalLM
 
 import sys
-sys.path.append("/home/slinevitable2003/Work/python_proj/mamba")
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 

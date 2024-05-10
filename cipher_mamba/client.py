@@ -2,7 +2,8 @@ import socket
 from transformers import AutoTokenizer
 
 import sys
-sys.path.append("/home/slinevitable2003/Work/python_proj/mamba")
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from cipher_mamba.insecure_sharing.models import protocol
 from cipher_mamba.insecure_sharing.socket import BetterSocket
 
