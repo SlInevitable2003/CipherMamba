@@ -43,9 +43,9 @@ torch.random.manual_seed(0)
 import socket
 
 HOST = "127.0.0.1"
-PORT = 43222
+PORT = 43225
 
-from cipher_mamba.insecure_sharing.models import protocol
+from cipher_mamba.insecure_sharing.protocols import protocol
 from cipher_mamba.insecure_sharing.socket import BetterSocket
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -56,6 +56,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     with conn:
         connn = BetterSocket(conn)
         protocol.set_socket(s=connn, role="S")
+        protocol.create_ahe(role="S")
 
         while True:
             input_ids = connn.recv()
@@ -77,16 +78,21 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 repetition_penalty=args.repetition_penalty,
             )
             print("Going to generate...")
-            out = fn()
-            protocol.synchronize('S', message="break")
-            out_sequences = out.sequences
-            out = out.sequences.tolist()
-            connn.sendall(out)
 
             torch.cuda.synchronize()
             start = time.time()
-            for _ in range(repeats):
-                fn()
+            out = fn()
             torch.cuda.synchronize()
+
+            protocol.synchronize('S', message="break")
+            out_sequences = out.sequences
+            # out = out.sequences.tolist()
+            # connn.sendall(out)
+
+            # torch.cuda.synchronize()
+            # start = time.time()
+            # for _ in range(repeats):
+            #     fn()
+            # torch.cuda.synchronize()
             print(f"Prompt length: {len(input_ids[0])}, generation length: {len(out_sequences[0]) - len(input_ids[0])}")
-            print(f"{args.model_name} prompt processing + decoding time: {(time.time() - start) / repeats * 1000:.0f}ms")
+            print(f"{args.model_name} prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")

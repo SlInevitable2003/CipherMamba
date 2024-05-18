@@ -17,3 +17,12 @@ excute:
 export HF_ENDPOINT=https://hf-mirror.com
 python cipher_mamba/client.py
 ```
+
+
+### for test
+
+try this prompt:
+
+```
+My cat wrote all this CUDA code for a new language model and
+```

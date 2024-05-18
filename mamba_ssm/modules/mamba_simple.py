@@ -330,6 +330,7 @@ class Block(nn.Module):
             hidden_states: the sequence to the encoder layer (required).
             residual: hidden_states = Mixer(LN(residual))
         """
+        from cipher_mamba.insecure_sharing.protocols import protocol
         if not self.fused_add_norm:
             residual = (hidden_states + residual) if residual is not None else hidden_states
             hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))

@@ -13,7 +13,7 @@ from torch import Tensor
 from torch.profiler import ProfilerActivity, profile, record_function
 from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput, TextStreamer
 
-from cipher_mamba.insecure_sharing.models import protocol
+from cipher_mamba.insecure_sharing.protocols import protocol
 
 @dataclass
 class InferenceParams:
