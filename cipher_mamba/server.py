@@ -43,7 +43,7 @@ torch.random.manual_seed(0)
 import socket
 
 HOST = "127.0.0.1"
-PORT = 43225
+PORT = 43232
 
 from cipher_mamba.insecure_sharing.protocols import protocol
 from cipher_mamba.insecure_sharing.socket import BetterSocket
@@ -55,7 +55,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     conn, addr = s.accept()
     with conn:
         connn = BetterSocket(conn)
-        protocol.set_socket(s=connn, role="S")
+        protocol.set_socket(s=connn)
         protocol.create_ahe(role="S")
 
         while True:

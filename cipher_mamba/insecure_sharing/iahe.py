@@ -54,7 +54,6 @@ class Polynomial:
         for i, c in stack.items():
             ret.coeff[i] = c
         return ret
-        
 
 class AHE:
     def __init__(self, poly_modulus_degree = 4096, plain_modulus_bits = 37, pk_str=None, rks_str=None):
@@ -106,6 +105,27 @@ class AHE:
         ret = self.eval.add(c, c2)
         self.eval.relinearize_inplace(ret, self.rks)
         return ret
+    
+    def ahe_add_plain_inplace(self, c, p, is_list = False):
+        if is_list:
+            p = Polynomial(deg=len(p)-1, coeff=p, mod_bits=self.plain_mod_bits)
+            m = Plaintext(p.to_string())
+        else:
+            m = p
+        c2 = self.enc.encrypt(m)
+        self.eval.add_inplace(c, c2)
+        self.eval.relinearize_inplace(c, self.rks)
+        return c
+    
+    def ahe_mul_plain_inplace(self, c, p, is_list = False):
+        if is_list:
+            p = Polynomial(deg=len(p)-1, coeff=p, mod_bits=self.plain_mod_bits)
+            m = Plaintext(p.to_string())
+        else:
+            m = p
+        self.eval.multiply_plain_inplace(c, m)
+        self.eval.relinearize_inplace(c, self.rks)
+        return c
 
 
 def Enc(x):

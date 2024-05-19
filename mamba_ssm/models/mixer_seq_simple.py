@@ -150,19 +150,19 @@ class MixerModel(nn.Module):
         }
 
     def forward(self, input_ids, inference_params=None):
-        true_hidden_states = self.embedding(input_ids)
-        vocab_size = self.embedding.num_embeddings
-        W = self.embedding(torch.arange(vocab_size).reshape(1, 1, vocab_size).to('cuda'))
+        hidden_states = self.embedding(input_ids)
+        # vocab_size = self.embedding.num_embeddings
+        # W = self.embedding(torch.arange(vocab_size).reshape(1, 1, vocab_size).to('cuda'))
         protocol.synchronize(role="S", message='ahe s2c')
-        protocol.synchronize('S', message="embedding")
+        # protocol.synchronize('S', message="embedding")
         
-        W = W.to(torch.double)
-        W = W.squeeze() * (1 << 12)
-        W = W.to(torch.int32)
-        hidden_states = protocol.insecure_embedding('S', W=W).to(torch.double)
-        hidden_states = hidden_states.unsqueeze(0).to('cuda')
-        hidden_states = hidden_states / (1 << 12)
-        hidden_states = hidden_states.to(torch.float16)
+        # W = W.to(torch.double)
+        # W = W.squeeze() * (1 << 12)
+        # W = W.to(torch.int32)
+        # hidden_states = protocol.insecure_embedding('S', W=W).to(torch.double)
+        # hidden_states = hidden_states.unsqueeze(0).to('cuda')
+        # hidden_states = hidden_states / (1 << 12)
+        # hidden_states = hidden_states.to(torch.float16)
 
         residual = None
         for layer in self.layers:
@@ -248,7 +248,18 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
         hidden_states = self.backbone(input_ids, inference_params=inference_params)
         if num_last_tokens > 0:
             hidden_states = hidden_states[:, -num_last_tokens:]
+        x = hidden_states.squeeze(0).to(torch.double) * (1 << 12)
+        x = x.to(torch.int64)
+        W = self.lm_head.weight.to(torch.double) * (1 << 12)
+        W = W.to(torch.int64).t()
+        protocol.synchronize('S', message='linear_lmHead', x=x)
+        protocol.logits = protocol.insecure_matmul('S', Y=W)
+        my_logits = protocol.logits.to(torch.double) / (1 << 24)
+        my_logits = my_logits.to(torch.int64)
         lm_logits = self.lm_head(hidden_states)
+        print(lm_logits)
+        print('=========')
+        print(protocol.logits)
         CausalLMOutput = namedtuple("CausalLMOutput", ["logits"])
         return CausalLMOutput(logits=lm_logits)
 
