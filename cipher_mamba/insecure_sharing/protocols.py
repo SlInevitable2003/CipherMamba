@@ -5,6 +5,13 @@ from insecure_sharing.socket import BetterSocket
 from insecure_sharing.iahe import AHE, Polynomial
 from insecure_sharing.seal import *
 
+class CipherOption:
+    use_secure_protocol = False
+    def secure_protocol_set(self):
+        use_secure_protocol = True
+
+options = CipherOption()
+
 class CipherMambaProtocol:
     def set_socket(self, s):
         self.socket = s
@@ -40,6 +47,10 @@ class CipherMambaProtocol:
                 x = s.recv()
                 self.logits = self.insecure_matmul('C', X=x)
                 return msg, None
+            elif msg == 'conv':
+                x = s.recv()
+                self.x_after_conv = self.insecure_matmul('C', X=x)
+                return msg, None
             elif msg == 'break':
                 return msg, None
         else:
@@ -54,7 +65,7 @@ class CipherMambaProtocol:
                 pk_str = s.recv()
                 rks_str = s.recv()
                 self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
-            elif message == 'linear_lmHead':
+            elif message in ['linear_lmHead', 'conv']:
                 s.sendall(x)
             return None
 
@@ -208,11 +219,11 @@ class CipherMambaProtocol:
             Y = F.pad(Y, (0, math.ceil(k / k_w) * k_w - k, 0, math.ceil(n / n_w) * n_w - n))
             m_p, n_p, k_p = 1, math.ceil(n / n_w), math.ceil(k / k_w)
 
-            print('')
+            # print('')
             Z = torch.zeros((m_p * m_w, k_p * k_w))
             for i in range(m_p):
                 for j in range(k_p):
-                    print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
+                    # print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
                         sum_ij += matmul_body(self, role=role, shape=[m_w, n_w, k_w], Y=Y[l*n_w:(l+1)*n_w, j*k_w:(j+1)*k_w])
