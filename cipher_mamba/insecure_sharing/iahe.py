@@ -56,7 +56,7 @@ class Polynomial:
         return ret
 
 class AHE:
-    def __init__(self, poly_modulus_degree = 4096, plain_modulus_bits = 37, pk_str=None, rks_str=None):
+    def __init__(self, poly_modulus_degree = 8192, plain_modulus_bits = 37, pk_str=None, rks_str=None):
         self.poly_mod_deg = poly_modulus_degree
         self.plain_mod_bits = plain_modulus_bits
 
@@ -126,13 +126,3 @@ class AHE:
         self.eval.multiply_plain_inplace(c, m)
         self.eval.relinearize_inplace(c, self.rks)
         return c
-
-
-def Enc(x):
-    return x
-
-def Dec(x):
-    return x
-
-def AHE_add(x, y):
-    return x + y

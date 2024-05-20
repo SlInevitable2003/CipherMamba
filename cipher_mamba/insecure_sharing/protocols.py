@@ -28,6 +28,11 @@ class CipherMambaProtocol:
                 rks_str = s.recv()
                 self.ahe_s = AHE(pk_str=pk_str, rks_str=rks_str)
                 return msg, None
+            elif msg == 'ahe c2s':
+                self.ahe_c = AHE()
+                s.sendall(self.ahe_c.pk.to_string())
+                s.sendall(self.ahe_c.rks.to_string())
+                return msg, None
             elif msg == 'onemore':
                 token = s.recv()
                 return msg, token
@@ -45,6 +50,10 @@ class CipherMambaProtocol:
             elif message == 'ahe s2c':
                 s.sendall(self.ahe_s.pk.to_string())
                 s.sendall(self.ahe_s.rks.to_string())
+            elif message == 'ahe c2s':
+                pk_str = s.recv()
+                rks_str = s.recv()
+                self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
             elif message == 'linear_lmHead':
                 s.sendall(x)
             return None
@@ -199,9 +208,11 @@ class CipherMambaProtocol:
             Y = F.pad(Y, (0, math.ceil(k / k_w) * k_w - k, 0, math.ceil(n / n_w) * n_w - n))
             m_p, n_p, k_p = 1, math.ceil(n / n_w), math.ceil(k / k_w)
 
+            print('')
             Z = torch.zeros((m_p * m_w, k_p * k_w))
             for i in range(m_p):
                 for j in range(k_p):
+                    print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
                         sum_ij += matmul_body(self, role=role, shape=[m_w, n_w, k_w], Y=Y[l*n_w:(l+1)*n_w, j*k_w:(j+1)*k_w])
