@@ -162,6 +162,9 @@ class MixerModel(nn.Module):
             hidden_states = hidden_states.unsqueeze(0).to('cuda')
             hidden_states = hidden_states / (1 << 12)
             hidden_states = hidden_states.to(torch.float16)
+
+            print(hidden_states)
+            print(self.embedding(input_ids))
         else:
             hidden_states = self.embedding(input_ids)
 

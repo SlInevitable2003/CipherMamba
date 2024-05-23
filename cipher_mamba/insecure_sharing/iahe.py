@@ -56,7 +56,7 @@ class Polynomial:
         return ret
 
 class AHE:
-    def __init__(self, poly_modulus_degree = 8192, plain_modulus_bits = 37, pk_str=None, rks_str=None):
+    def __init__(self, poly_modulus_degree = 4096, plain_modulus_bits = 37, pk_str=None, rks_str=None):
         self.poly_mod_deg = poly_modulus_degree
         self.plain_mod_bits = plain_modulus_bits
 
@@ -71,11 +71,11 @@ class AHE:
             gen = KeyGenerator(self.context)
             self.sk = gen.secret_key()
             self.pk = gen.create_public_key()
-            self.rks = gen.create_relin_keys()
+            # self.rks = gen.create_relin_keys()
             self.dec = Decryptor(self.context, self.sk)
         else:
             self.pk = self.context.from_public_str(pk_str)
-            self.rks = self.context.from_relin_str(rks_str)
+            # self.rks = self.context.from_relin_str(rks_str)
 
         self.enc = Encryptor(self.context, self.pk)
         self.eval = Evaluator(self.context)
@@ -103,7 +103,7 @@ class AHE:
             m = p
         c2 = self.enc.encrypt(m)
         ret = self.eval.add(c, c2)
-        self.eval.relinearize_inplace(ret, self.rks)
+        # self.eval.relinearize_inplace(ret, self.rks)
         return ret
     
     def ahe_add_plain_inplace(self, c, p, is_list = False):
@@ -114,7 +114,7 @@ class AHE:
             m = p
         c2 = self.enc.encrypt(m)
         self.eval.add_inplace(c, c2)
-        self.eval.relinearize_inplace(c, self.rks)
+        # self.eval.relinearize_inplace(c, self.rks)
         return c
     
     def ahe_mul_plain_inplace(self, c, p, is_list = False):
@@ -124,5 +124,5 @@ class AHE:
         else:
             m = p
         self.eval.multiply_plain_inplace(c, m)
-        self.eval.relinearize_inplace(c, self.rks)
+        # self.eval.relinearize_inplace(c, self.rks)
         return c

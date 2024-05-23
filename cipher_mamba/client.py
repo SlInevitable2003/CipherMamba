@@ -11,11 +11,11 @@ device = "cuda"
 tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
 HOST = "127.0.0.1"
-PORT = 43245
+PORT = 43252
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
-    ss = BetterSocket(s)
+    ss = BetterSocket(s, fast_identity='c')
     protocol.set_socket(s=ss)
     print("Successfully connect to the cipher-mamba server")
 

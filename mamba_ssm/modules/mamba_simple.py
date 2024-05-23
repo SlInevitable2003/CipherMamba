@@ -163,47 +163,49 @@ class Mamba(nn.Module):
         else:
             import copy
             x, z = xz.chunk(2, dim=1)
-            xx = copy.deepcopy(x)
-
-            # Compute short convolution
-            if conv_state is not None:
-                # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
-                # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
-                conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W) 
-            if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen])
-            else:
-                assert self.activation in ["silu", "swish"]
-                x = causal_conv1d_fn(
-                    x=x,
-                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                    bias=self.conv1d.bias,
-                    activation=self.activation,
-                )
-            xx = xx.squeeze().to(torch.double) * (1 << 12)
-            xx = xx.to(torch.int64)
-            conv_kernel = self.conv1d.weight.squeeze()
-            conv_bias = self.conv1d.bias.unsqueeze(0).t()
-            conv_res = torch.zeros((self.d_inner, seqlen))
             
-            print('')
-            for d in range(self.d_inner):
-                print(f'\r{d}/{self.d_inner}', end='')
-                f_kernel = torch.zeros((seqlen + 6, seqlen + 3))
-                for j in range(seqlen + 3):
-                    f_kernel[j : j + 4, j] = conv_kernel[d].t()
-                f_kernel = f_kernel.to(torch.double) * (1 << 12)
-                f_kernel = f_kernel.to(torch.int64)
-                protocol.synchronize('S', message='conv', x=F.pad(xx[d], (3, 3)).unsqueeze(0))
-                line = protocol.insecure_matmul('S', Y=f_kernel)
-                conv_res[d] = line[:, 0:seqlen]
-            protocol.x_after_conv = conv_res.t()
-            conv_res = conv_res.to(torch.double) / (1 << 24)
-            conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
-            silu_t = nn.SiLU()
-            conv_res = silu_t(conv_res)
-            print(conv_res)
-            print(x)
+
+            if options.use_secure_protocol == True:
+                xx = copy.deepcopy(x)
+                xx = xx.squeeze().to(torch.double) * (1 << 12)
+                xx = xx.to(torch.int64)
+                conv_kernel = self.conv1d.weight.squeeze()
+                conv_bias = self.conv1d.bias.unsqueeze(0).t()
+                conv_res = torch.zeros((self.d_inner, seqlen))
+                
+                print('')
+                for d in range(self.d_inner):
+                    print(f'\r{d}/{self.d_inner}', end='')
+                    f_kernel = torch.zeros((seqlen + 6, seqlen + 3))
+                    for j in range(seqlen + 3):
+                        f_kernel[j : j + 4, j] = conv_kernel[d].t()
+                    f_kernel = f_kernel.to(torch.double) * (1 << 12)
+                    f_kernel = f_kernel.to(torch.int64)
+                    protocol.synchronize('S', message='conv', x=F.pad(xx[d], (3, 3)).unsqueeze(0))
+                    line = protocol.insecure_matmul('S', Y=f_kernel)
+                    conv_res[d] = line[:, 0:seqlen]
+                protocol.x_after_conv = conv_res.t()
+                conv_res = conv_res.to(torch.double) / (1 << 24)
+                conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
+                silu_t = nn.SiLU()
+                conv_res = silu_t(conv_res).unsqueeze(0)
+                x = conv_res
+            else:
+                # Compute short convolution
+                if conv_state is not None:
+                    # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
+                    # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
+                    conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W) 
+                if causal_conv1d_fn is None:
+                    x = self.act(self.conv1d(x)[..., :seqlen])
+                else:
+                    assert self.activation in ["silu", "swish"]
+                    x = causal_conv1d_fn(
+                        x=x,
+                        weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                        bias=self.conv1d.bias,
+                        activation=self.activation,
+                    )
 
 
             # We're careful here about the layout, to avoid extra transposes.

@@ -3,14 +3,16 @@ import torch
 import torch.nn.functional as F
 from insecure_sharing.socket import BetterSocket
 from insecure_sharing.iahe import AHE, Polynomial
+from insecure_sharing.multi_threading import MultiThreading
 from insecure_sharing.seal import *
 
 class CipherOption:
     use_secure_protocol = False
     def secure_protocol_set(self):
-        use_secure_protocol = True
+        self.use_secure_protocol = True
 
 options = CipherOption()
+options.secure_protocol_set()
 
 class CipherMambaProtocol:
     def set_socket(self, s):
@@ -32,13 +34,14 @@ class CipherMambaProtocol:
                 return msg, None
             elif msg == 'ahe s2c':
                 pk_str = s.recv()
-                rks_str = s.recv()
-                self.ahe_s = AHE(pk_str=pk_str, rks_str=rks_str)
+                # rks_str = s.recv()
+                # self.ahe_s = AHE(pk_str=pk_str, rks_str=rks_str)
+                self.ahe_s = AHE(pk_str=pk_str)
                 return msg, None
             elif msg == 'ahe c2s':
                 self.ahe_c = AHE()
                 s.sendall(self.ahe_c.pk.to_string())
-                s.sendall(self.ahe_c.rks.to_string())
+                # s.sendall(self.ahe_c.rks.to_string())
                 return msg, None
             elif msg == 'onemore':
                 token = s.recv()
@@ -60,11 +63,12 @@ class CipherMambaProtocol:
                 s.sendall(token)
             elif message == 'ahe s2c':
                 s.sendall(self.ahe_s.pk.to_string())
-                s.sendall(self.ahe_s.rks.to_string())
+                # s.sendall(self.ahe_s.rks.to_string())
             elif message == 'ahe c2s':
                 pk_str = s.recv()
-                rks_str = s.recv()
-                self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
+                # rks_str = s.recv()
+                # self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
+                self.ahe_c = AHE(pk_str=pk_str)
             elif message in ['linear_lmHead', 'conv']:
                 s.sendall(x)
             return None
@@ -79,7 +83,7 @@ class CipherMambaProtocol:
             if self.embedding_first_time == True:
                 self.Enc_Ws = []
                 for i in range(k):
-                    line = self.ahe_s.context.from_cipher_str(s.recv())
+                    line = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                     self.Enc_Ws.append(line)
 
             ids = input_ids.squeeze(0)
@@ -96,7 +100,7 @@ class CipherMambaProtocol:
             
             s.sendall(n)
             for i in Enc_ws:
-                s.sendall(i.to_string())
+                s.sendall(i.to_string(), already_bstr=True)
             self.x_after_embedding = (-1) * r
 
             # insecure reveal
@@ -110,18 +114,29 @@ class CipherMambaProtocol:
             s.sendall(k)
             s.sendall(m)
             
-
             print('')
             if self.embedding_first_time == True:
+                # print('lines creating...')
+                # lines = [W[i].tolist() for i in range(k)]
+                # print('target creating...')
+                # target = lambda line : self.ahe_s.enc_list(line).to_string()
+                # print('threads creating...')
+                # threads = MultiThreading(target=target, args=lines, granularity=32, show_process=False)
+                # threads.start()
+                # threads.join()
+                # for i, j in enumerate(threads.ret_buffer):
+                #     print(f'\r[{i}] going to send...', end='')
+                #     s.sendall(j, already_bstr=True)
                 for i in range(k):
                     line = W[i].tolist()
-                    print(f'\r[{i}] going to send:', line[0:3] + ['...'] + line[-3:], end='')
-                    s.sendall(self.ahe_s.enc_list(line).to_string())
+                    print(f'\r[{i}] going to send...', end='')
+                    obj = self.ahe_s.enc_list(line).to_string()
+                    s.sendall(obj, already_bstr=True)
 
             n = s.recv()
             w_plus_r = torch.zeros((n, m))
             for i in range(n):
-                line = self.ahe_s.context.from_cipher_str(s.recv())
+                line = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                 line_lst = self.ahe_s.dec_list(line, length=m)
                 w_plus_r[i] = torch.as_tensor(line_lst)
             self.x_after_embedding = w_plus_r
@@ -150,7 +165,7 @@ class CipherMambaProtocol:
                 for i in range(m):
                     for j in range(n):
                         pix_coeff[i * n * k + (n - 1) - j] = X[i][j].item()
-                ct = self.ahe_s.context.from_cipher_str(s.recv())
+                ct = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                 self.ahe_s.ahe_mul_plain_inplace(ct, pix_coeff, is_list=True)
 
                 r = torch.randn((m, k)).to(torch.double) * (1 << 12)
@@ -160,7 +175,7 @@ class CipherMambaProtocol:
                     for j in range(k):
                         piz_coeff[i * n * k + (j + 1) * n - 1] = r[i][j].item()
                 self.ahe_s.ahe_add_plain(ct, piz_coeff, is_list=True)
-                s.sendall(ct.to_string())
+                s.sendall(ct.to_string(), already_bstr=True)
                 return (-1) * r
             else:
                 s = self.socket
@@ -171,8 +186,8 @@ class CipherMambaProtocol:
                     for j in range(k):
                         piy_coeff[j * n + i] = Y[i][j].item()
                 ct = self.ahe_s.enc_list(piy_coeff)
-                s.sendall(ct.to_string())
-                ct = self.ahe_s.context.from_cipher_str(s.recv())
+                s.sendall(ct.to_string(), already_bstr=True)
+                ct = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                 piz_coeff = self.ahe_s.dec_list(ct, length=m*n*k)
                 Z = torch.zeros((m, k)).to(torch.int64)
                 for i in range(m):
