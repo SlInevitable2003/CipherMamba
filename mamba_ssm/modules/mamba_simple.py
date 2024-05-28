@@ -174,6 +174,10 @@ class Mamba(nn.Module):
                 conv_res = torch.zeros((self.d_inner, seqlen))
                 
                 print('')
+                f_kernel = torch.zeros((self.d_inner * (seqlen + 6), self.d_inner * (seqlen + 3)))
+                for d in range(self.d_inner):
+                    for j in range(seqlen + 3):
+                        f_kernel[j : j + 4, j] = conv_kernel[d].t()
                 for d in range(self.d_inner):
                     print(f'\r{d}/{self.d_inner}', end='')
                     f_kernel = torch.zeros((seqlen + 6, seqlen + 3))

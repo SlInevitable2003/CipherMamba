@@ -3,7 +3,8 @@ import torch
 import torch.nn.functional as F
 from insecure_sharing.socket import BetterSocket
 from insecure_sharing.iahe import AHE, Polynomial
-from insecure_sharing.multi_threading import MultiThreading
+from cipher_mamba.insecure_sharing.multi_processing import MultiProcessing
+from ctypes import c_char_p
 from insecure_sharing.seal import *
 
 class CipherOption:
@@ -85,6 +86,8 @@ class CipherMambaProtocol:
                 for i in range(k):
                     line = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                     self.Enc_Ws.append(line)
+                    if i % 5000 == 0:
+                        s.sendall(b'wait...', already_bstr=True)
 
             ids = input_ids.squeeze(0)
             n = ids.shape[0]
@@ -116,22 +119,26 @@ class CipherMambaProtocol:
             
             print('')
             if self.embedding_first_time == True:
-                # print('lines creating...')
-                # lines = [W[i].tolist() for i in range(k)]
-                # print('target creating...')
-                # target = lambda line : self.ahe_s.enc_list(line).to_string()
-                # print('threads creating...')
-                # threads = MultiThreading(target=target, args=lines, granularity=32, show_process=False)
-                # threads.start()
-                # threads.join()
-                # for i, j in enumerate(threads.ret_buffer):
+                lines = [W[i].tolist() for i in range(k)]
+                target = lambda lst : protocol.ahe_s.enc_list(lst).to_string()
+                print('processes creating...')
+                processes = MultiProcessing(target=target, args=lines, granularity=32, show_process=True)
+                processes.start()
+                processes.join()
+                processes.terminate()
+
+                line_idx = 0
+                for i in processes.ret_buffer:
+                    print(f'\r[{line_idx}] going to send...', end='')
+                    s.sendall(i, already_bstr=True)
+                    if line_idx % 5000 == 0:
+                        s.recv(already_bstr=True)
+                    line_idx += 1
+                # for i in range(k):
+                #     line = W[i].tolist()
                 #     print(f'\r[{i}] going to send...', end='')
-                #     s.sendall(j, already_bstr=True)
-                for i in range(k):
-                    line = W[i].tolist()
-                    print(f'\r[{i}] going to send...', end='')
-                    obj = self.ahe_s.enc_list(line).to_string()
-                    s.sendall(obj, already_bstr=True)
+                #     obj = self.ahe_s.enc_list(line).to_string()
+                #     s.sendall(obj, already_bstr=True)
 
             n = s.recv()
             w_plus_r = torch.zeros((n, m))
