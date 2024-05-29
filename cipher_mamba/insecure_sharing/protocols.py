@@ -86,8 +86,6 @@ class CipherMambaProtocol:
                 for i in range(k):
                     line = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                     self.Enc_Ws.append(line)
-                    if i % 5000 == 0:
-                        s.sendall(b'wait...', already_bstr=True)
 
             ids = input_ids.squeeze(0)
             n = ids.shape[0]
@@ -122,23 +120,17 @@ class CipherMambaProtocol:
                 lines = [W[i].tolist() for i in range(k)]
                 target = lambda lst : protocol.ahe_s.enc_list(lst).to_string()
                 print('processes creating...')
-                processes = MultiProcessing(target=target, args=lines, granularity=32, show_process=True)
+
+                processes = MultiProcessing(target=target, args=lines, granularity=32)
                 processes.start()
                 processes.join()
-                processes.terminate()
 
                 line_idx = 0
-                for i in processes.ret_buffer:
-                    print(f'\r[{line_idx}] going to send...', end='')
-                    s.sendall(i, already_bstr=True)
-                    if line_idx % 5000 == 0:
-                        s.recv(already_bstr=True)
-                    line_idx += 1
-                # for i in range(k):
-                #     line = W[i].tolist()
-                #     print(f'\r[{i}] going to send...', end='')
-                #     obj = self.ahe_s.enc_list(line).to_string()
-                #     s.sendall(obj, already_bstr=True)
+                for i in processes.ret_buffer():
+                    for j in i:
+                        print(f'\r[{line_idx}] going to send...', end='')
+                        s.sendall(j, already_bstr=True)
+                        line_idx += 1
 
             n = s.recv()
             w_plus_r = torch.zeros((n, m))

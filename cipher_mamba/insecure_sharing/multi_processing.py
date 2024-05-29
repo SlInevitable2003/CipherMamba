@@ -59,15 +59,17 @@ class MultiProcessing:
     def join(self):
         for i in self.process_pool:
             i.join()
+            i.close()
+
+    def ret_buffer(self):
         for i in range(len(self.process_pool)):
             path = self.buffer_prefix + str(i) + '.pickle'
             with open(path, 'rb') as f:
                 obj = pickle.load(f)
-            for j in obj:
-                if j is None:
-                    break
-                self.ret_buffer.append(j)
-        
-    def terminate(self):
-        for i in self.process_pool:
-            i.terminate()
+            with open(path, 'wb') as f:
+                pass
+            
+            if i == len(self.process_pool) - 1:
+                obj = [x for x in obj if x is not None]
+
+            yield obj

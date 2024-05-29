@@ -11,7 +11,7 @@ device = "cuda"
 tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
 HOST = "127.0.0.1"
-PORT = 43264
+PORT = 43267
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
