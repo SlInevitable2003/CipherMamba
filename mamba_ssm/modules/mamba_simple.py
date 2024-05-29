@@ -164,8 +164,7 @@ class Mamba(nn.Module):
             import copy
             x, z = xz.chunk(2, dim=1)
             
-
-            if options.use_secure_protocol == True:
+            if options.use_secure_protocol == True and False:
                 xx = copy.deepcopy(x)
                 xx = xx.squeeze().to(torch.double) * (1 << 12)
                 xx = xx.to(torch.int64)
@@ -366,24 +365,29 @@ class Block(nn.Module):
             hidden_states: the sequence to the encoder layer (required).
             residual: hidden_states = Mixer(LN(residual))
         """
-        from cipher_mamba.insecure_sharing.protocols import protocol
-        if not self.fused_add_norm:
+        from cipher_mamba.insecure_sharing.protocols import protocol, options
+
+        if options.use_secure_protocol == True and False:
+            protocol.synchronize(role='S', message='residual_plus')
             residual = (hidden_states + residual) if residual is not None else hidden_states
-            hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
-            if self.residual_in_fp32:
-                residual = residual.to(torch.float32)
         else:
-            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm, RMSNorm) else layer_norm_fn
-            hidden_states, residual = fused_add_norm_fn(
-                hidden_states,
-                self.norm.weight,
-                self.norm.bias,
-                residual=residual,
-                prenorm=True,
-                residual_in_fp32=self.residual_in_fp32,
-                eps=self.norm.eps,
-            )
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+            if not self.fused_add_norm:
+                residual = (hidden_states + residual) if residual is not None else hidden_states
+                hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
+                if self.residual_in_fp32:
+                    residual = residual.to(torch.float32)
+            else:
+                fused_add_norm_fn = rms_norm_fn if isinstance(self.norm, RMSNorm) else layer_norm_fn
+                hidden_states, residual = fused_add_norm_fn(
+                    hidden_states,
+                    self.norm.weight,
+                    self.norm.bias,
+                    residual=residual,
+                    prenorm=True,
+                    residual_in_fp32=self.residual_in_fp32,
+                    eps=self.norm.eps,
+                )
+            hidden_states = self.mixer(hidden_states, inference_params=inference_params)
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):

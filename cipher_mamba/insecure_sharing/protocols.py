@@ -4,13 +4,17 @@ import torch.nn.functional as F
 from insecure_sharing.socket import BetterSocket
 from insecure_sharing.iahe import AHE, Polynomial
 from cipher_mamba.insecure_sharing.multi_processing import MultiProcessing
-from ctypes import c_char_p
 from insecure_sharing.seal import *
 
 class CipherOption:
-    use_secure_protocol = False
-    def secure_protocol_set(self):
+    use_secure_protocol = True
+    use_secure_protocol_embedding = False
+    
+    def secure_protocol_set(self, **kwargs):
         self.use_secure_protocol = True
+
+        if kwargs.get('embedding') is not None:
+            self.use_secure_protocol_embedding = kwargs['embedding']
 
 options = CipherOption()
 options.secure_protocol_set()
@@ -35,18 +39,20 @@ class CipherMambaProtocol:
                 return msg, None
             elif msg == 'ahe s2c':
                 pk_str = s.recv()
-                # rks_str = s.recv()
-                # self.ahe_s = AHE(pk_str=pk_str, rks_str=rks_str)
-                self.ahe_s = AHE(pk_str=pk_str)
+                rks_str = s.recv()
+                self.ahe_s = AHE(pk_str=pk_str, rks_str=rks_str)
                 return msg, None
             elif msg == 'ahe c2s':
                 self.ahe_c = AHE()
                 s.sendall(self.ahe_c.pk.to_string())
-                # s.sendall(self.ahe_c.rks.to_string())
+                s.sendall(self.ahe_c.rks.to_string())
                 return msg, None
             elif msg == 'onemore':
                 token = s.recv()
                 return msg, token
+            elif msg == 'residual_plus':
+                self.residual = self.residual + self.hidden_states
+
             elif msg == 'linear_lmHead':
                 x = s.recv()
                 self.logits = self.insecure_matmul('C', X=x)
@@ -64,12 +70,11 @@ class CipherMambaProtocol:
                 s.sendall(token)
             elif message == 'ahe s2c':
                 s.sendall(self.ahe_s.pk.to_string())
-                # s.sendall(self.ahe_s.rks.to_string())
+                s.sendall(self.ahe_s.rks.to_string())
             elif message == 'ahe c2s':
                 pk_str = s.recv()
-                # rks_str = s.recv()
-                # self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
-                self.ahe_c = AHE(pk_str=pk_str)
+                rks_str = s.recv()
+                self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
             elif message in ['linear_lmHead', 'conv']:
                 s.sendall(x)
             return None
@@ -102,11 +107,12 @@ class CipherMambaProtocol:
             s.sendall(n)
             for i in Enc_ws:
                 s.sendall(i.to_string(), already_bstr=True)
-            self.x_after_embedding = (-1) * r
+            self.hidden_states = (-1) * r
+            self.residual = torch.zeros_like(self.hidden_states)
 
             # insecure reveal
 
-            s.sendall(self.x_after_embedding)
+            s.sendall(self.hidden_states)
             self.embedding_first_time = False
             return None
         else:
@@ -127,10 +133,9 @@ class CipherMambaProtocol:
 
                 line_idx = 0
                 for i in processes.ret_buffer():
-                    for j in i:
-                        print(f'\r[{line_idx}] going to send...', end='')
-                        s.sendall(j, already_bstr=True)
-                        line_idx += 1
+                    print(f'\r[{line_idx}] going to send...', end='')
+                    s.sendall(i, already_bstr=True)
+                    line_idx += 1
 
             n = s.recv()
             w_plus_r = torch.zeros((n, m))
@@ -138,15 +143,29 @@ class CipherMambaProtocol:
                 line = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                 line_lst = self.ahe_s.dec_list(line, length=m)
                 w_plus_r[i] = torch.as_tensor(line_lst)
-            self.x_after_embedding = w_plus_r
+            self.hidden_states = w_plus_r
+            self.residual = torch.zeros_like(self.hidden_states)
 
             # insecure reveal
 
             x = s.recv()
-            x = x + self.x_after_embedding
+            x = x + self.hidden_states
             self.embedding_first_time = False
             return x
-        
+
+    def insecure_rmsnorm(self, role, w=None, eps=None):
+        if role == 'C':
+            s = self.socket
+        else:
+            s = self.socket
+            self.residual = self.residual + self.hidden_states
+
+    def insecure_mul(self, role, x=None, y=None):
+        if role == 'C':
+            pass
+        else:
+            pass
+
     def insecure_matmul(self, role, X=None, Y=None):
         import math
 
@@ -154,45 +173,6 @@ class CipherMambaProtocol:
             t = math.ceil(math.sqrt(m * n * k / N))
             assert m * max(1, math.floor(n / t)) * max(1, math.floor(k / t)) <= N
             return m, max(1, math.floor(n / t)), max(1, math.floor(k / t))
-        
-        def matmul_body(self : CipherMambaProtocol, role, shape, X=None, Y=None):
-            if role == 'C':
-                s = self.socket
-                m, n, k = shape[0], shape[1], shape[2]
-
-                pix_coeff = [0] * ((m - 1) * n * k + n)
-                for i in range(m):
-                    for j in range(n):
-                        pix_coeff[i * n * k + (n - 1) - j] = X[i][j].item()
-                ct = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
-                self.ahe_s.ahe_mul_plain_inplace(ct, pix_coeff, is_list=True)
-
-                r = torch.randn((m, k)).to(torch.double) * (1 << 12)
-                r = r.to(torch.int64)
-                piz_coeff = [0] * (m * n * k)
-                for i in range(m):
-                    for j in range(k):
-                        piz_coeff[i * n * k + (j + 1) * n - 1] = r[i][j].item()
-                self.ahe_s.ahe_add_plain(ct, piz_coeff, is_list=True)
-                s.sendall(ct.to_string(), already_bstr=True)
-                return (-1) * r
-            else:
-                s = self.socket
-                m, n, k = shape[0], shape[1], shape[2]
-
-                piy_coeff = [0] * (k * n)
-                for i in range(n):
-                    for j in range(k):
-                        piy_coeff[j * n + i] = Y[i][j].item()
-                ct = self.ahe_s.enc_list(piy_coeff)
-                s.sendall(ct.to_string(), already_bstr=True)
-                ct = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
-                piz_coeff = self.ahe_s.dec_list(ct, length=m*n*k)
-                Z = torch.zeros((m, k)).to(torch.int64)
-                for i in range(m):
-                    for j in range(k):
-                        Z[i][j] = piz_coeff[i * n * k + (j + 1) * n - 1]
-                return Z
         
         if role == 'C':
             s = self.socket
@@ -204,15 +184,86 @@ class CipherMambaProtocol:
             N = self.ahe_s.poly_mod_deg
 
             m_w, n_w, k_w = cal_block(m, n, k, N)
-            X = F.pad(X, (0, math.ceil(n / n_w) * n_w - n, 0, 0))
+            X = F.pad(X, (0, math.ceil(n / n_w) * n_w - n, 0, 0)).to('cpu')
             m_p, n_p, k_p = 1, math.ceil(n / n_w), math.ceil(k / k_w)
+
+            def get_target_poly(ijl):
+                X_t = X[ijl[0]*m_w:(ijl[0]+1)*m_w, ijl[2]*n_w:(ijl[2]+1)*n_w]
+                pix_coeff = [0] * ((m_w - 1) * n_w * k_w + n_w)
+                for i in range(m_w):
+                    for j in range(n_w):
+                        pix_coeff[i * n_w * k_w + (n_w - 1) - j] = X_t[i][j].item()
+                
+                r = torch.randn((m_w, k_w)).to(torch.double) * (1 << 12)
+                r = r.to(torch.int64)
+                piz_coeff = [0] * (m_w * n_w * k_w)
+                for i in range(m_w):
+                    for j in range(k_w):
+                        piz_coeff[i * n_w * k_w + (j + 1) * n_w - 1] = r[i][j].item()
+                
+                return [pix_coeff, piz_coeff, r.tolist()]
+            
+            args = [[i, j, l] for i in range(m_p) for j in range(k_p) for l in range(n_p)]
+            processes = MultiProcessing(target=get_target_poly, args=args, role='c', granularity=32)
+            processes.start()
+            processes.join()
+
+            # ct = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
+            # self.ahe_s.ahe_mul_plain_inplace(ct, pix_coeff, is_list=True)
+            # self.ahe_s.ahe_add_plain(ct, piz_coeff, is_list=True)
+            # s.sendall(ct.to_string(), already_bstr=True)
+
+            s.recv()
+
+            def get_ans_poly(pid):
+                import pickle
+                common_prefix = './cipher_mamba/insecure_sharing/socket_buffer/buffer'
+                path_s = common_prefix + 's' + str(pid) + '.pickle'
+                path_c = common_prefix + 'c' + str(pid) + '.pickle'
+                with open(path_c, 'rb') as f:
+                    pix_piz_r_lst = pickle.load(f)
+                with open(path_c, 'wb'): pass
+                with open(path_s, 'rb') as f:
+                    encpiy_lst = pickle.load(f)
+                with open(path_s, 'wb'): pass
+
+                assert len(pix_piz_r_lst) == len(encpiy_lst)
+                l = len(pix_piz_r_lst)
+
+                ret = []
+                for i in range(l):
+                    pix_piz_r = pix_piz_r_lst[i]
+                    if pix_piz_r is None:
+                        break
+                    ct = self.ahe_s.context.from_cipher_str(encpiy_lst[i])
+                    pix, piz, r = pix_piz_r[0], pix_piz_r[1], pix_piz_r[2]
+
+                    self.ahe_s.ahe_mul_plain_inplace(ct, pix, is_list=True)
+                    self.ahe_s.ahe_add_plain_inplace(ct, piz, is_list=True)
+                    ret.append([ct.to_string(), r])
+                return ret
+            
+            processes = MultiProcessing(target=get_ans_poly, args=[i for i in range(32)], role='c', granularity=32, extra_buffer=True)
+            processes.start()
+            processes.join()
+
+            def ret_buffer(large_buffer):
+                for i in large_buffer:
+                    for j in i:
+                        yield j
+            ans_buffer = ret_buffer(processes.ret_buffer())
+
+            s.sendall(b'OK')
+            s.recv()
 
             Z = torch.zeros((m_p * m_w, k_p * k_w))
             for i in range(m_p):
                 for j in range(k_p):
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
-                        sum_ij += matmul_body(self, role=role, shape=[m_w, n_w, k_w], X=X[i*m_w:(i+1)*m_w, l*n_w:(l+1)*n_w])
+                        nxt = next(ans_buffer)
+                        r = torch.as_tensor(nxt[1])
+                        sum_ij += r
                     Z[i*m_w:(i+1)*m_w, j*k_w:(j+1)*k_w] = sum_ij
             Z = Z[0:m, 0:k]
 
@@ -230,17 +281,68 @@ class CipherMambaProtocol:
             N = self.ahe_s.poly_mod_deg
 
             m_w, n_w, k_w = cal_block(m, n, k, N)
-            Y = F.pad(Y, (0, math.ceil(k / k_w) * k_w - k, 0, math.ceil(n / n_w) * n_w - n))
+            Y = F.pad(Y, (0, math.ceil(k / k_w) * k_w - k, 0, math.ceil(n / n_w) * n_w - n)).to('cpu')
             m_p, n_p, k_p = 1, math.ceil(n / n_w), math.ceil(k / k_w)
+            
+            # optimization version since tensor operation is used instead of iteration
+            target = lambda ijl : self.ahe_s.enc_list(Y[ijl[2]*n_w:(ijl[2]+1)*n_w, ijl[1]*k_w:(ijl[1]+1)*k_w].t().flatten().tolist()).to_string()
+            args = [[i, j, l] for i in range(m_p) for j in range(k_p) for l in range(n_p)]
+            processes = MultiProcessing(target=target, args=args, granularity=32, show_process=False)
+            processes.start()
+            processes.join()
 
-            # print('')
+            s.sendall(b'OK')
+            s.recv()
+
+            # ct = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
+            # piz_coeff = self.ahe_s.dec_list(ct, length=m*n*k)
+            # Z = torch.zeros((m, k)).to(torch.int64)
+            # for i in range(m):
+            #     for j in range(k):
+            #         Z[i][j] = piz_coeff[i * n * k + (j + 1) * n - 1]
+
+            def get_ans_poly(pid):
+                import pickle
+                path = './cipher_mamba/insecure_sharing/socket_buffer/ex_bufferc' + str(pid) + '.pickle'
+                with open(path, 'rb') as f:
+                    ct_r_lst = pickle.load(f)
+                ct_r_lst = ct_r_lst[0]
+                
+                ret = []
+                for ct_r in ct_r_lst:
+                    ct = ct_r[0]
+                    ct = self.ahe_s.context.from_cipher_str(ct)
+                    
+                    piz_coeff = self.ahe_s.dec_list(ct, length=m_w*n_w*k_w)
+                    Z = torch.zeros((m_w, k_w)).to(torch.int64)
+                    for i in range(m_w):
+                        for j in range(k_w):
+                            Z[i][j] = piz_coeff[i * n_w * k_w + (j + 1) * n_w - 1]
+                    ret.append(Z.tolist())
+                return ret
+                
+            processes = MultiProcessing(target=get_ans_poly, args=[i for i in range(32)], role='s', granularity=32)
+            processes.start()
+            processes.join()
+            
+            def ret_buffer(large_buffer):
+                for i in large_buffer:
+                    for j in i:
+                        yield j
+            ans_buffer = ret_buffer(processes.ret_buffer())
+
+            s.sendall(b'OK')
+
+            print('')
             Z = torch.zeros((m_p * m_w, k_p * k_w))
             for i in range(m_p):
                 for j in range(k_p):
-                    # print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
+                    print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
-                        sum_ij += matmul_body(self, role=role, shape=[m_w, n_w, k_w], Y=Y[l*n_w:(l+1)*n_w, j*k_w:(j+1)*k_w])
+                        Z_l = next(ans_buffer)
+                        Z_l = torch.as_tensor(Z_l)
+                        sum_ij += Z_l
                     Z[i*m_w:(i+1)*m_w, j*k_w:(j+1)*k_w] = sum_ij
             Z = Z[0:m, 0:k]
 

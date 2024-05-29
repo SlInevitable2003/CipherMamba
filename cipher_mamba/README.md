@@ -15,6 +15,7 @@ excute:
 
 ```
 export HF_ENDPOINT=https://hf-mirror.com
+export TOKENIZERS_PARALLELISM=true
 python cipher_mamba/client.py
 ```
 

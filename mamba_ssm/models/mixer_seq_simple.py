@@ -150,7 +150,8 @@ class MixerModel(nn.Module):
         }
 
     def forward(self, input_ids, inference_params=None):
-        if options.use_secure_protocol == True:
+
+        if options.use_secure_protocol == True and False:
             vocab_size = self.embedding.num_embeddings
             W = self.embedding(torch.arange(vocab_size).reshape(1, 1, vocab_size).to('cuda'))
             protocol.synchronize('S', message="embedding")
@@ -162,9 +163,6 @@ class MixerModel(nn.Module):
             hidden_states = hidden_states.unsqueeze(0).to('cuda')
             hidden_states = hidden_states / (1 << 12)
             hidden_states = hidden_states.to(torch.float16)
-
-            print(hidden_states)
-            print(self.embedding(input_ids))
         else:
             hidden_states = self.embedding(input_ids)
 
@@ -263,6 +261,9 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
             my_logits = protocol.logits.to(torch.double) / (1 << 24)
             my_logits = my_logits.to(dtype=torch.float16, device='cuda')
             lm_logits = my_logits.unsqueeze(0)
+
+            print(lm_logits)
+            print(self.lm_head(hidden_states))
         else:
             lm_logits = self.lm_head(hidden_states)
         

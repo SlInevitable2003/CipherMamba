@@ -6,12 +6,16 @@ class MultiProcessing:
     process_pool = []
     ret_buffer = []
 
-    def __init__(self, target, args, granularity = 32, show_process = False, ):
+    def __init__(self, target, args, role = 's', granularity = 32, show_process = False, extra_buffer = False):
         n = len(args)
-        assert n > granularity
+        if n < granularity:
+            granularity = n
 
-        self.buffer_prefix = './cipher_mamba/insecure_sharing/socket_buffer/buffer'
-        
+        common_path = './cipher_mamba/insecure_sharing/socket_buffer/'
+        file_name = 'buffer' if not extra_buffer else 'ex_buffer'
+        self.buffer_prefix = common_path + file_name + role
+        self.process_pool = [None] * granularity
+
         t = math.ceil(n / granularity)
         if t * granularity - n > 0:
             args += [None] * (t * granularity - n)
@@ -42,10 +46,6 @@ class MultiProcessing:
         args = modify_for_args(args)
         target = modify_for_ret(target)
         for i in range(granularity):
-            self.process_pool.append(multiprocessing.Process(target=target, args=args[i]))
-
-    def reset(self, target, args):
-        for i in range(len(self.process_pool)):
             self.process_pool[i] = multiprocessing.Process(target=target, args=args[i])
 
     def start(self):
@@ -69,7 +69,7 @@ class MultiProcessing:
             with open(path, 'wb') as f:
                 pass
             
-            if i == len(self.process_pool) - 1:
-                obj = [x for x in obj if x is not None]
-
-            yield obj
+            for j in obj:
+                if j is None:
+                    break
+                yield j
