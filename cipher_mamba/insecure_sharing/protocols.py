@@ -52,7 +52,7 @@ class CipherMambaProtocol:
                 return msg, token
             elif msg == 'residual_plus':
                 self.residual = self.residual + self.hidden_states
-
+                self.insecure_rmsnorm(role='C')
             elif msg == 'linear_lmHead':
                 x = s.recv()
                 self.logits = self.insecure_matmul('C', X=x)
@@ -108,7 +108,7 @@ class CipherMambaProtocol:
             for i in Enc_ws:
                 s.sendall(i.to_string(), already_bstr=True)
             self.hidden_states = (-1) * r
-            self.residual = torch.zeros_like(self.hidden_states)
+            self.residual = torch.zeros_like(self.hidden_states).to(torch.int32)
 
             # insecure reveal
 
@@ -138,13 +138,13 @@ class CipherMambaProtocol:
                     line_idx += 1
 
             n = s.recv()
-            w_plus_r = torch.zeros((n, m))
+            w_plus_r = torch.zeros((n, m)).to(torch.int32)
             for i in range(n):
                 line = self.ahe_s.context.from_cipher_str(s.recv(already_bstr=True))
                 line_lst = self.ahe_s.dec_list(line, length=m)
                 w_plus_r[i] = torch.as_tensor(line_lst)
             self.hidden_states = w_plus_r
-            self.residual = torch.zeros_like(self.hidden_states)
+            self.residual = torch.zeros_like(self.hidden_states).to(torch.int32)
 
             # insecure reveal
 
@@ -156,9 +156,35 @@ class CipherMambaProtocol:
     def insecure_rmsnorm(self, role, w=None, eps=None):
         if role == 'C':
             s = self.socket
+            s.sendall(self.residual)
+            self.hidden_states = s.recv()
+
         else:
+            import copy
             s = self.socket
             self.residual = self.residual + self.hidden_states
+            residual = s.recv()
+            residual += self.residual
+            
+            m = residual.shape[1]
+            assert m == 768
+
+            org_res = copy.deepcopy(residual)
+            real_res = copy.deepcopy(org_res)
+            residual = torch.sum(residual * residual, dim=1) >> 12
+            residual = residual.to(torch.double) / (m * (1 << 12))
+            residual += eps
+            residual = residual ** (-0.5)
+            residual = residual * (1 << 12)
+            residual = residual.to(torch.int64)
+            
+            org_res = (org_res * residual.unsqueeze(0).t()) >> 12
+            org_res = (org_res * w) >> 12
+
+            self.hidden_states = org_res >> 1
+            s.sendall(org_res - self.hidden_states)
+
+            return org_res, real_res
 
     def insecure_mul(self, role, x=None, y=None):
         if role == 'C':

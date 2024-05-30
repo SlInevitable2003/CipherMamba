@@ -151,7 +151,7 @@ class MixerModel(nn.Module):
 
     def forward(self, input_ids, inference_params=None):
 
-        if options.use_secure_protocol == True and False:
+        if options.use_secure_protocol == True:
             vocab_size = self.embedding.num_embeddings
             W = self.embedding(torch.arange(vocab_size).reshape(1, 1, vocab_size).to('cuda'))
             protocol.synchronize('S', message="embedding")

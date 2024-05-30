@@ -164,8 +164,7 @@ class Mamba(nn.Module):
             import copy
             x, z = xz.chunk(2, dim=1)
             
-            conv_res = copy.deepcopy(x)
-            if options.use_secure_protocol == True:
+            if options.use_secure_protocol == True and False:
                 xx = copy.deepcopy(x)
                 xx = xx.squeeze().to(torch.double) * (1 << 12)
                 xx = xx.to(torch.int64)
@@ -180,8 +179,8 @@ class Mamba(nn.Module):
                 conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
                 silu_t = nn.SiLU()
                 conv_res = silu_t(conv_res).unsqueeze(0)
-                # x = conv_res
-            if True:
+                x = conv_res
+            else:
                 # Compute short convolution
                 if conv_state is not None:
                     # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
@@ -197,9 +196,6 @@ class Mamba(nn.Module):
                         bias=self.conv1d.bias,
                         activation=self.activation,
                     )
-            print(x)
-            print(conv_res)
-            x = conv_res
 
             # We're careful here about the layout, to avoid extra transposes.
             # We want dt to have d as the slowest moving dimension
@@ -359,7 +355,13 @@ class Block(nn.Module):
 
         if options.use_secure_protocol == True and False:
             protocol.synchronize(role='S', message='residual_plus')
-            residual = (hidden_states + residual) if residual is not None else hidden_states
+            gamma = self.norm.weight.to(torch.double) * (1 << 12)
+            gamma = gamma.to(dtype=torch.int64, device='cpu')
+            hidden_states, residual = protocol.insecure_rmsnorm(role='S', w=gamma, eps=1e-5)
+            hidden_states = hidden_states.to(torch.double) / (1 << 12)
+            hidden_states = hidden_states.to(torch.float16)
+            residual = residual.to(torch.double) / (1 << 12)
+            residual = residual.to(torch.float16)
         else:
             if not self.fused_add_norm:
                 residual = (hidden_states + residual) if residual is not None else hidden_states
@@ -377,7 +379,7 @@ class Block(nn.Module):
                     residual_in_fp32=self.residual_in_fp32,
                     eps=self.norm.eps,
                 )
-            hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
