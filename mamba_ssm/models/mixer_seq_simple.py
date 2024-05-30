@@ -251,7 +251,7 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
         if num_last_tokens > 0:
             hidden_states = hidden_states[:, -num_last_tokens:]
         
-        if options.use_secure_protocol == True:
+        if options.use_secure_protocol == True and False:
             x = hidden_states.squeeze(0).to(torch.double) * (1 << 12)
             x = x.to(torch.int64)
             W = self.lm_head.weight.to(torch.double) * (1 << 12)

@@ -59,7 +59,7 @@ class CipherMambaProtocol:
                 return msg, None
             elif msg == 'conv':
                 x = s.recv()
-                self.x_after_conv = self.insecure_matmul('C', X=x)
+                self.x = self.insecure_conv('C', X=x)
                 return msg, None
             elif msg == 'break':
                 return msg, None
@@ -351,5 +351,117 @@ class CipherMambaProtocol:
             ZZ = s.recv()
             Z = Z + ZZ
             return Z
+
+    def insecure_conv(self, role, X=None, K=None):
+        if role == 'C':
+            s = self.socket
+
+            d, n = X.shape[0], X.shape[1] - 6
+            X = X.to('cpu')
+            s.sendall(n)
+
+            args = [x for x in range(d)]
+
+            def get_target_poly(channel):
+                m_w, n_w, k_w = 1, n + 6, n + 3
+                X_t = X[channel, :].unsqueeze(0)
+                pix_coeff = [0] * ((m_w - 1) * n_w * k_w + n_w)
+                for i in range(m_w):
+                    for j in range(n_w):
+                        pix_coeff[i * n_w * k_w + (n_w - 1) - j] = X_t[i][j].item()
+                
+                r = torch.randn((m_w, k_w)).to(torch.double) * (1 << 12)
+                r = r.to(torch.int64)
+                piz_coeff = [0] * (m_w * n_w * k_w)
+                for i in range(m_w):
+                    for j in range(k_w):
+                        piz_coeff[i * n_w * k_w + (j + 1) * n_w - 1] = r[i][j].item()
+                
+                return [pix_coeff, piz_coeff, r.tolist()]
+
+            processes = MultiProcessing(target=get_target_poly, args=args, role='c', granularity=32)
+            processes.start()
+            processes.join()
+
+            pix_piz_r_lst = [x for x in processes.ret_buffer()]
+            pix_lst = [x[0] for x in pix_piz_r_lst]
+            piz_lst = [x[1] for x in pix_piz_r_lst]
+            r_lst = [x[2] for x in pix_piz_r_lst]
+            self.x = torch.as_tensor(r_lst).squeeze()
+            self.x = self.x[:, 0 : n].t()
+
+            del pix_piz_r_lst
+            
+            enc_piy_lst = []
+            for i in range(d):
+                enc_piy_lst.append(s.recv(already_bstr=True))
+            
+            def get_ans_poly(channel):
+                ct = self.ahe_s.context.from_cipher_str(enc_piy_lst[channel])
+                self.ahe_s.ahe_mul_plain_inplace(ct, pix_lst[channel], is_list=True)
+                self.ahe_s.ahe_add_plain_inplace(ct, piz_lst[channel], is_list=True)
+                return ct.to_string()
+            
+            processes = MultiProcessing(target=get_ans_poly, args=args, role='c', granularity=32)
+            processes.start()
+            processes.join()
+            
+            for i in processes.ret_buffer():
+                s.sendall(i, already_bstr=True)
+
+            # insecure revealing
+
+            s.sendall(self.x)
+
+        else:
+            s = self.socket
+
+            d = K.shape[0]
+            K = K.to('cpu')
+            n = s.recv()
+
+            args = [x for x in range(d)]
+
+            def get_target_poly(channel):
+                f_kernel = torch.zeros((n + 6, n + 3)).to(torch.int64)
+                kernel = K[channel].t()
+                for j in range(n + 3):
+                    f_kernel[j : j + 4, j] = kernel
+                return self.ahe_s.enc_list(f_kernel.t().flatten().tolist()).to_string()
+
+            processes = MultiProcessing(target=get_target_poly, args=args, granularity=32)
+            processes.start()
+            processes.join()
+
+            for i in processes.ret_buffer():
+                s.sendall(i, already_bstr=True)
+
+            ct_lst = []
+            for i in range(d):
+                ct_lst.append(s.recv(already_bstr=True))
+
+            def get_ans_poly(channel):
+                m_w, n_w, k_w = 1, n + 6, n + 3
+                ct = self.ahe_s.context.from_cipher_str(ct_lst[channel])
+                    
+                piz_coeff = self.ahe_s.dec_list(ct, length=m_w*n_w*k_w)
+                Z = torch.zeros((m_w, k_w)).to(torch.int64)
+                for i in range(m_w):
+                    for j in range(k_w):
+                        Z[i][j] = piz_coeff[i * n_w * k_w + (j + 1) * n_w - 1]
+                return Z.tolist()
+            
+            processes = MultiProcessing(target=get_ans_poly, args=args, granularity=32)
+            processes.start()
+            processes.join()
+
+            self.x = torch.as_tensor([x for x in processes.ret_buffer()]).squeeze()
+            self.x = self.x[:, 0 : n].t()
+
+            # insecure revealing
+
+            x = s.recv()
+            x += self.x
+            return x.t()
 
 protocol = CipherMambaProtocol()

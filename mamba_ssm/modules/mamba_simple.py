@@ -164,36 +164,24 @@ class Mamba(nn.Module):
             import copy
             x, z = xz.chunk(2, dim=1)
             
-            if options.use_secure_protocol == True and False:
+            conv_res = copy.deepcopy(x)
+            if options.use_secure_protocol == True:
                 xx = copy.deepcopy(x)
                 xx = xx.squeeze().to(torch.double) * (1 << 12)
                 xx = xx.to(torch.int64)
-                conv_kernel = self.conv1d.weight.squeeze()
+                conv_kernel = self.conv1d.weight.squeeze().to(torch.double) * (1 << 12)
+                conv_kernel = conv_kernel.to(torch.int64)
                 conv_bias = self.conv1d.bias.unsqueeze(0).t()
-                conv_res = torch.zeros((self.d_inner, seqlen))
                 
-                print('')
-                f_kernel = torch.zeros((self.d_inner * (seqlen + 6), self.d_inner * (seqlen + 3)))
-                for d in range(self.d_inner):
-                    for j in range(seqlen + 3):
-                        f_kernel[j : j + 4, j] = conv_kernel[d].t()
-                for d in range(self.d_inner):
-                    print(f'\r{d}/{self.d_inner}', end='')
-                    f_kernel = torch.zeros((seqlen + 6, seqlen + 3))
-                    for j in range(seqlen + 3):
-                        f_kernel[j : j + 4, j] = conv_kernel[d].t()
-                    f_kernel = f_kernel.to(torch.double) * (1 << 12)
-                    f_kernel = f_kernel.to(torch.int64)
-                    protocol.synchronize('S', message='conv', x=F.pad(xx[d], (3, 3)).unsqueeze(0))
-                    line = protocol.insecure_matmul('S', Y=f_kernel)
-                    conv_res[d] = line[:, 0:seqlen]
-                protocol.x_after_conv = conv_res.t()
+                protocol.synchronize('S', message='conv', x=F.pad(xx, (3, 3)))
+                conv_res = protocol.insecure_conv('S', K=conv_kernel)
+
                 conv_res = conv_res.to(torch.double) / (1 << 24)
                 conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
                 silu_t = nn.SiLU()
                 conv_res = silu_t(conv_res).unsqueeze(0)
-                x = conv_res
-            else:
+                # x = conv_res
+            if True:
                 # Compute short convolution
                 if conv_state is not None:
                     # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
@@ -209,7 +197,9 @@ class Mamba(nn.Module):
                         bias=self.conv1d.bias,
                         activation=self.activation,
                     )
-
+            print(x)
+            print(conv_res)
+            x = conv_res
 
             # We're careful here about the layout, to avoid extra transposes.
             # We want dt to have d as the slowest moving dimension

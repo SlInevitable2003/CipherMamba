@@ -43,7 +43,7 @@ torch.random.manual_seed(0)
 import socket
 
 HOST = "127.0.0.1"
-PORT = 43272
+PORT = 43279
 
 from cipher_mamba.insecure_sharing.protocols import protocol
 from cipher_mamba.insecure_sharing.socket import BetterSocket
