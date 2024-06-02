@@ -476,31 +476,69 @@ class CipherMambaProtocol:
 
         if role == 'C':
             s = self.socket
-            s.sendall(input_array.shape)
             s.sendall(self.ckks_c.pk.to_string())
             s.sendall(self.ckks_c.rks.to_string())
 
-            input_cipher_C = self.ckks_c.enc_array(input_array.numpy())
-            input_cipher_exp_C = self.ckks_c.enc_array(torch.exp(-input_array).numpy())
-            
+            length = 1
+            for i in input_array.shape:
+                length *= i
 
+            input_cipher_C = self.ckks_c.enc_array(input_array.reshape(length).numpy())
+            input_cipher_exp_C = self.ckks_c.enc_array(torch.exp(-input_array).reshape(length).numpy())
+            s.sendall(input_cipher_C.to_string())
+            s.sendall(input_cipher_exp_C.to_string())
+
+            input_cipher_exp_C_str = s.recv()
+            input_cipher_C_str = s.recv()
+            input_cipher_exp_C = self.ahe_s.context.from_cipher_str(input_cipher_exp_C_str)
+            input_cipher_C = self.ahe_s.context.from_cipher_str(input_cipher_C_str)
+            
+            input_exp_C = self.ckks_c.dec_array(input_cipher_exp_C, length)
+            input_C = self.ckks_c.dec_array(input_cipher_C, length)
+
+            SiLU_C_mul = input_C * input_exp_C
+            s.sendall(SiLU_C_mul)
             pass
         else:
             s = self.socket
-            shape = s.recv()
             pk = s.recv()
             rks = s.recv()
             self.ckks_s = CKKS(pk_str=pk, rks_str=rks)
             
-            input_plain_exp_S = self.ckks_s.encode.encode(torch.exp(-input_array).numpy(),self.ckks_s.scale)
-            
             length = 1
-            for i in shape:
+            for i in input_array.shape:
                 length *= i
+            input_plain_exp_S = self.ckks_s.encode.encode(torch.exp(-input_array).reshape(length).numpy(),self.ckks_s.scale)
+
+            input_cipher_C_str = s.recv()
+            input_cipher_exp_C_str = s.recv()
+            input_cipher_C = self.ahe_s.context.from_cipher_str(input_cipher_C_str)
+            input_cipher_exp_C = self.ahe_s.context.from_cipher_str(input_cipher_exp_C_str)
 
             ran2 = np.random.random(length)
             ran2_plain_S = self.ckks_s.encode.encode(ran2, self.ckks_s.scale)
+            ran3 = np.random.random(length)#S
+            ran3_plain_S = self.ckks_s.encode.encode(ran3, self.ckks_s.scale)
 
-            pass
+            self.ckks_s.ckks_mul_plain_inplace(input_cipher_exp_C, input_plain_exp_S)
+            ones_plain_S = self.ckks_s.encode.encode(np.ones(length),self.ckks_s.scale)
+            ones_cipher_S = self.ckks_s.enc_array(np.ones(length))
+            self.ckks_s.ckks_mul_plain_inplace(ones_cipher_S, ones_plain_S)
+            self.ckks_s.eval.add_inplace(input_cipher_exp_C,ones_cipher_S)
+            self.ckks_s.ckks_mul_plain_inplace(input_cipher_exp_C, ran2_plain_S)
+
+            self.ckks_s.ckks_mul_plain_inplace(input_cipher_C, ran3_plain_S)
+
+
+            s.sendall(input_cipher_exp_C.to_string())
+            s.sendall(input_cipher_C.to_string())
+            ran3 = 1/ran3
+
+            SiLU_S_mul = ran3*ran2
+            SiLU_C_mul = s.recv()
+
+            output = SiLU_C_mul*SiLU_S_mul
+            output.reshape(input_array.shape)
+            return output
 
 protocol = CipherMambaProtocol()
