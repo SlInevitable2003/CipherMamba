@@ -163,3 +163,33 @@ class CKKS:
         self.eval = Evaluator(self.context)
         self.encode = CKKSEncoder(self.context)
         self.scale = pow(2.0, scale)
+
+    def enc_array(self, array):
+        arr_p = self.encode.encode(array,self.scale)
+        arr_c = self.enc.encrypt(arr_p)
+        return arr_c
+    
+    def dec_array(self,c,len):
+        arr_p = self.dec.decrypt(c)
+        arr = self.encode.decode(arr_p)[:len]
+        return arr
+    
+    def ckks_add_plain_inplace(self, c, p, is_array = False):
+        if is_array:
+            m = self.encode.encode(p, self.scale)
+        else:
+            m = p
+        c2 = self.enc.encrypt(m)
+        self.eval.add_inplace(c, c2)
+        self.eval.relinearize_inplace(c, self.rks)
+        return c
+
+    def ckks_mul_plain_inplace(self, c, p, is_array = False):
+        if is_array:
+            m = self.encode.encode(p,self.scale)
+        else:
+            m = p
+
+        self.eval.multiply_plain_inplace(c, m)
+        self.eval.rescale_to_next_inplace(c)
+        return c
