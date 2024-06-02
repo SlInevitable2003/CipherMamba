@@ -138,3 +138,28 @@ class AHE:
         self.eval.multiply_plain_inplace(c, m)
         self.eval.relinearize_inplace(c, self.rks)
         return c
+    
+class CKKS:
+    def __init__(self, poly_modulus_degree = 4096, scale=40, pk_str=None, rks_str=None):
+        self.poly_mod_deg = poly_modulus_degree
+
+        parms = EncryptionParameters (scheme_type.ckks)
+        parms.set_poly_modulus_degree(poly_modulus_degree)
+        parms.set_coeff_modulus(CoeffModulus.Create(self.poly_mod_deg, [60, 40, 40, 60]))
+
+        self.context = SEALContext(parms)
+
+        if pk_str == None:
+            gen = KeyGenerator(self.context)
+            self.sk = gen.secret_key()
+            self.pk = gen.create_public_key()
+            self.rks = gen.create_relin_keys()
+            self.dec = Decryptor(self.context, self.sk)
+        else:
+            self.pk = self.context.from_public_str(pk_str)
+            self.rks = self.context.from_relin_str(rks_str)
+
+        self.enc = Encryptor(self.context, self.pk)
+        self.eval = Evaluator(self.context)
+        self.encode = CKKSEncoder(self.context)
+        self.scale = pow(2.0, scale)

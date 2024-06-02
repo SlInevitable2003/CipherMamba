@@ -463,5 +463,10 @@ class CipherMambaProtocol:
             x = s.recv()
             x += self.x
             return x.t()
+    def insecure_SiLU(self, role, str, dt_C, dt_S, A_C, A_S):
+        if role == 'C':
+            pass
+        else:
+            pass
 
 protocol = CipherMambaProtocol()
