@@ -629,6 +629,12 @@ class CipherMambaProtocol:
     def insecure_einsum(self, role, str, dt, A):
         if role == 'C':
             s = self.socket
+            self.ckks_c = CKKS()
+            s.sendall(self.ckks_c.pk.to_string())
+            s.sendall(self.ckks_c.rks.to_string())
+            pk = s.recv()
+            rks = s.recv()
+            self.ckks_c2 = CKKS(pk_str=pk, rks_str=rks)
             if str == "bd,dn->bdn":
                 dt_C = dt.unsqueeze(-1)
                 dt_C = dt_C.repeat(1,1,A.shape[1])
@@ -641,13 +647,48 @@ class CipherMambaProtocol:
                 A_C = A_C.repeat(1,dt_C.shape[1],1)
             else:
                 pass
+
+            length = 1
+            for i in dt_C.shape:
+                length *= i
+            dt_C_cipher = self.ckks_c.enc_array(dt_C.to('cpu').reshape(length).numpy())
+            A_C_plain = self.ckks_c2.encode.encode(A_C.to('cpu').reshape(length).numpy(),self.ckks_c2.scale)
+            
+            s.sendall(dt_C_cipher.to_string())
+            dt_S_cipher_str = s.recv()
+
+            dt_S_cipher = self.ckks_c2.context.from_cipher_str(dt_S_cipher_str)
+            
+            ran_C = np.random.random(length)
+            ran_C_cipher = self.ckks_c2.enc_array(ran_C)
+            ones_plain = self.ckks_c2.encode.encode(np.ones(length),self.ckks_c2.scale)
+
+            self.ckks_c2.eval.multiply_plain_inplace(dt_S_cipher, A_C_plain)
+            self.ckks_c2.eval.multiply_plain_inplace(ran_C_cipher, ones_plain)
+            self.ckks_c2.eval.add_inplace(dt_S_cipher, ran_C_cipher)
+
+            s.sendall(dt_S_cipher.to_string())
+            dt_C_plus_A_S_C_cipher_str = s.recv()
+            dt_C_plus_A_S_C_cipher = self.ckks_c.context.from_cipher_str(dt_C_plus_A_S_C_cipher_str)
+            dt_C_plus_A_S_C = self.ckks_c.dec_array(dt_C_plus_A_S_C_cipher, length)
+
+            ran_C = -ran_C
+
+            einsum_C = (dt_C*A_C).to('cpu').numpy() + dt_C_plus_A_S_C.reshape(dt.shape[0], dt.shape[1], A.shape[1]) + ran_C.reshape(dt.shape[0], dt.shape[1], A.shape[1])
+            s.sendall(einsum_C)
             return dt
         else:
             s = self.socket
+            pk = s.recv()
+            rks = s.recv()
+            self.ckks_s = CKKS(pk_str=pk, rks_str=rks)
+            self.ckks_s2 = CKKS()
+            s.sendall(self.ckks_s2.pk.to_string())
+            s.sendall(self.ckks_s2.rks.to_string())
             if str == "bd,dn->bdn":
                 dt_S = dt.unsqueeze(-1)
                 dt_S = dt_S.repeat(1,1,A.shape[1])
-                A_S = A_S.unsqueeze(0)
+                A_S = A.unsqueeze(0)
                 A_S = A_S.repeat(dt_S.shape[0], 1, 1)#bd,dn->bdn
             elif str == "bd,bn->bdn":
                 dt_S = dt.unsqueeze(-1)
@@ -656,8 +697,35 @@ class CipherMambaProtocol:
                 A_S = A_S.repeat(1,dt_S.shape[1],1)
             else:
                 pass
+
+            length = 1
+            for i in dt_S.shape:
+                length *= i
+            # print(dt_S.shape)
+            dt_S_cipher = self.ckks_s2.enc_array(dt_S.to('cpu').reshape(length).numpy())
+            A_S_plain = self.ckks_s.encode.encode(A_S.to('cpu').reshape(length).numpy(),self.ckks_s.scale)
+
+            dt_C_cipher_str = s.recv()
+            s.sendall(dt_S_cipher.to_string())
+
+            dt_C_cipher = self.ckks_s.context.from_cipher_str(dt_C_cipher_str)
             
-            einsum_S = dt * A + dt_S_plus_A_C_S.reshape(dt.shape[0], dt.shape[1], A.shape[1]) + ran_S.reshape(dt.shape[0], dt.shape[1], A.shape[1])
+            ran_S = np.random.random(length)
+            ran_S_cipher = self.ckks_s.enc_array(ran_S)
+            ones_plain = self.ckks_s.encode.encode(np.ones(length),self.ckks_s.scale)
+
+            self.ckks_s.eval.multiply_plain_inplace(dt_C_cipher, A_S_plain)
+            self.ckks_s.eval.multiply_plain_inplace(ran_S_cipher, ones_plain)
+            self.ckks_s.eval.add_inplace(dt_C_cipher, ran_S_cipher)
+
+            dt_S_plus_A_C_S_cipher_str = s.recv()
+            s.sendall(dt_C_cipher.to_string())
+            dt_S_plus_A_C_S_cipher = self.ckks_s.context.from_cipher_str(dt_S_plus_A_C_S_cipher_str)
+            dt_S_plus_A_C_S = self.ckks_s2.dec_array(dt_S_plus_A_C_S_cipher, length)
+
+            ran_S = -ran_S
+
+            einsum_S = (dt_S * A_S).to('cpu').numpy() + dt_S_plus_A_C_S.reshape(dt.shape[0], dt.shape[1], A.shape[1]) + ran_S.reshape(dt.shape[0], dt.shape[1], A.shape[1])
             einsum_C = s.recv()
             einsum_result = einsum_C + einsum_S
             return  einsum_result
