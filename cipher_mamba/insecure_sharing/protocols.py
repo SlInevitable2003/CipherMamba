@@ -476,22 +476,31 @@ class CipherMambaProtocol:
 
         if role == 'C':
             s = self.socket
+            s.sendall(input_array.shape)
             s.sendall(self.ckks_c.pk.to_string())
             s.sendall(self.ckks_c.rks.to_string())
 
-            input_plain_C = self.ckks_c.enc_array(input_array.numpy())
-            input_plain_exp_C = self.ckks_c.enc_array(torch.exp(-input_array).numpy())
-
+            input_cipher_C = self.ckks_c.enc_array(input_array.numpy())
+            input_cipher_exp_C = self.ckks_c.enc_array(torch.exp(-input_array).numpy())
+            
 
             pass
         else:
             s = self.socket
+            shape = s.recv()
             pk = s.recv()
             rks = s.recv()
             self.ckks_s = CKKS(pk_str=pk, rks_str=rks)
             
-            input_plain_exp_S = self.ckks_s.enc_array(torch.exp(-input_array).numpy()
-                                                      )
+            input_plain_exp_S = self.ckks_s.encode.encode(torch.exp(-input_array).numpy(),self.ckks_s.scale)
+            
+            length = 1
+            for i in shape:
+                length *= i
+
+            ran2 = np.random.random(length)
+            ran2_plain_S = self.ckks_s.encode.encode(ran2, self.ckks_s.scale)
+
             pass
 
 protocol = CipherMambaProtocol()
