@@ -140,7 +140,7 @@ class AHE:
         return c
     
 class CKKS:
-    def __init__(self, poly_modulus_degree = 4096, scale=40, pk_str=None, rks_str=None):
+    def __init__(self, poly_modulus_degree = 8192, scale=40, pk_str=None, rks_str=None):
         self.poly_mod_deg = poly_modulus_degree
 
         parms = EncryptionParameters (scheme_type.ckks)

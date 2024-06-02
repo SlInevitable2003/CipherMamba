@@ -69,6 +69,10 @@ class CipherMambaProtocol:
                 x = s.recv()
                 self.x = self.insecure_conv('C', X=x)
                 return msg, None
+            elif msg == 'SiLU':
+                x = s.recv()
+                self.x = self.insecure_SiLU('C', input_array = x)
+                return msg, None
             elif msg == 'break':
                 return msg, None
         else:
@@ -84,6 +88,8 @@ class CipherMambaProtocol:
                 rks_str = s.recv()
                 self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
             elif message in ['linear_lmHead', 'conv']:
+                s.sendall(x)
+            elif message == 'SiLU':
                 s.sendall(x)
             return None
 
@@ -476,59 +482,65 @@ class CipherMambaProtocol:
 
         if role == 'C':
             s = self.socket
+            self.ckks_c = CKKS()
             s.sendall(self.ckks_c.pk.to_string())
             s.sendall(self.ckks_c.rks.to_string())
 
             length = 1
             for i in input_array.shape:
                 length *= i
-
-            input_cipher_C = self.ckks_c.enc_array(input_array.reshape(length).numpy())
-            input_cipher_exp_C = self.ckks_c.enc_array(torch.exp(-input_array).reshape(length).numpy())
+            input_a = input_array.to('cpu')
+            input_cipher_C = self.ckks_c.enc_array(input_a.reshape(length).numpy())
+            input_cipher_exp_C = self.ckks_c.enc_array(torch.exp(-input_a).reshape(length).numpy())
             s.sendall(input_cipher_C.to_string())
             s.sendall(input_cipher_exp_C.to_string())
 
             input_cipher_exp_C_str = s.recv()
             input_cipher_C_str = s.recv()
-            input_cipher_exp_C = self.ahe_s.context.from_cipher_str(input_cipher_exp_C_str)
-            input_cipher_C = self.ahe_s.context.from_cipher_str(input_cipher_C_str)
+            input_cipher_exp_C = self.ckks_c.context.from_cipher_str(input_cipher_exp_C_str)
+            input_cipher_C = self.ckks_c.context.from_cipher_str(input_cipher_C_str)
             
             input_exp_C = self.ckks_c.dec_array(input_cipher_exp_C, length)
+            input_exp_C = 1/input_exp_C
             input_C = self.ckks_c.dec_array(input_cipher_C, length)
 
             SiLU_C_mul = input_C * input_exp_C
             s.sendall(SiLU_C_mul)
-            pass
+            return input_array
         else:
             s = self.socket
             pk = s.recv()
             rks = s.recv()
             self.ckks_s = CKKS(pk_str=pk, rks_str=rks)
-            
+
             length = 1
             for i in input_array.shape:
                 length *= i
-            input_plain_exp_S = self.ckks_s.encode.encode(torch.exp(-input_array).reshape(length).numpy(),self.ckks_s.scale)
+            
+            input_a_S = input_array.to('cpu')
+            input_plain_S = self.ckks_s.encode.encode(input_a_S.reshape(length), self.ckks_s.scale)
+            input_plain_exp_S = self.ckks_s.encode.encode(torch.exp(-input_a_S).reshape(length).numpy(),self.ckks_s.scale)
 
             input_cipher_C_str = s.recv()
             input_cipher_exp_C_str = s.recv()
-            input_cipher_C = self.ahe_s.context.from_cipher_str(input_cipher_C_str)
-            input_cipher_exp_C = self.ahe_s.context.from_cipher_str(input_cipher_exp_C_str)
+            input_cipher_C = self.ckks_s.context.from_cipher_str(input_cipher_C_str)
+            input_cipher_exp_C = self.ckks_s.context.from_cipher_str(input_cipher_exp_C_str)
 
             ran2 = np.random.random(length)
             ran2_plain_S = self.ckks_s.encode.encode(ran2, self.ckks_s.scale)
             ran3 = np.random.random(length)#S
             ran3_plain_S = self.ckks_s.encode.encode(ran3, self.ckks_s.scale)
-
-            self.ckks_s.ckks_mul_plain_inplace(input_cipher_exp_C, input_plain_exp_S)
             ones_plain_S = self.ckks_s.encode.encode(np.ones(length),self.ckks_s.scale)
             ones_cipher_S = self.ckks_s.enc_array(np.ones(length))
-            self.ckks_s.ckks_mul_plain_inplace(ones_cipher_S, ones_plain_S)
+
+            self.ckks_s.eval.multiply_plain_inplace(input_cipher_exp_C, input_plain_exp_S)
+            self.ckks_s.eval.multiply_plain_inplace(ones_cipher_S, ones_plain_S)
             self.ckks_s.eval.add_inplace(input_cipher_exp_C,ones_cipher_S)
             self.ckks_s.ckks_mul_plain_inplace(input_cipher_exp_C, ran2_plain_S)
+            self.ckks_s.eval.rescale_to_next_inplace(input_cipher_exp_C)
 
+            self.ckks_s.ckks_add_plain_inplace(input_cipher_C, input_plain_S)
             self.ckks_s.ckks_mul_plain_inplace(input_cipher_C, ran3_plain_S)
-
 
             s.sendall(input_cipher_exp_C.to_string())
             s.sendall(input_cipher_C.to_string())
@@ -538,7 +550,7 @@ class CipherMambaProtocol:
             SiLU_C_mul = s.recv()
 
             output = SiLU_C_mul*SiLU_S_mul
-            output.reshape(input_array.shape)
+            output = torch.tensor(output, dtype=input_array.dtype, device=input_array.device)
             return output
 
 protocol = CipherMambaProtocol()
