@@ -1,8 +1,9 @@
 import copy
 import torch
+import numpy as np
 import torch.nn.functional as F
 from insecure_sharing.socket import BetterSocket
-from insecure_sharing.iahe import AHE, Polynomial
+from insecure_sharing.iahe import AHE, CKKS, Polynomial
 from cipher_mamba.insecure_sharing.multi_processing import MultiProcessing
 from insecure_sharing.seal import *
 
@@ -29,6 +30,13 @@ class CipherMambaProtocol:
             self.ahe_c = ahe
         else:
             self.ahe_s = ahe
+
+    def create_ckks(self, role):
+        ckks = CKKS()
+        if role == 'C':
+            self.ckks_c = ckks
+        else:
+            self.ckks_s = ckks
 
     def synchronize(self, role, message=None, input_ids=None, token=None, x=None):
         if role == 'C':
@@ -463,10 +471,27 @@ class CipherMambaProtocol:
             x = s.recv()
             x += self.x
             return x.t()
-    def insecure_SiLU(self, role, str, dt_C, dt_S, A_C, A_S):
+    def insecure_SiLU(self, role, input_array):
+        import math
+
         if role == 'C':
+            s = self.socket
+            s.sendall(self.ckks_c.pk.to_string())
+            s.sendall(self.ckks_c.rks.to_string())
+
+            input_plain_C = self.ckks_c.enc_array(input_array.numpy())
+            input_plain_exp_C = self.ckks_c.enc_array(torch.exp(-input_array).numpy())
+
+
             pass
         else:
+            s = self.socket
+            pk = s.recv()
+            rks = s.recv()
+            self.ckks_s = CKKS(pk_str=pk, rks_str=rks)
+            
+            input_plain_exp_S = self.ckks_s.enc_array(torch.exp(-input_array).numpy()
+                                                      )
             pass
 
 protocol = CipherMambaProtocol()
