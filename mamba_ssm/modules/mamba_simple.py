@@ -179,11 +179,12 @@ class Mamba(nn.Module):
                 conv_res = conv_res.to(torch.double) / (1 << 24)
                 conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
                 silu_t = nn.SiLU()
-                o = torch.ones_like(conv_res)#don`t need
-                protocol.synchronize('S', message='SiLU', x=o[:200])
-                silu_rr = protocol.insecure_SiLU('S', (conv_res-o)[:200])
-                print("silu:\n",silu_rr.reshape(200,3)[:10])
-                print(silu_t(conv_res[:200])[:10])
+                if False:
+                    o = torch.ones_like(conv_res)#don`t need
+                    protocol.synchronize('S', message='SiLU', x=o[:200])
+                    silu_rr = protocol.insecure_SiLU('S', (conv_res-o)[:200])
+                    print("silu:\n",silu_rr.reshape(200,3)[:10])
+                    print(silu_t(conv_res[:200])[:10])
                 conv_res = silu_t(conv_res).unsqueeze(0) 
                 # x = conv_res
             if True:
@@ -275,6 +276,13 @@ class Mamba(nn.Module):
             y = y + self.D.to(dtype) * x
             y = y * self.act(z)  # (B D)
         else:
+            if False:
+                o = torch.ones_like(dt)
+                print(o.shape)
+                protocol.synchronize('S', message='Softplus', x=o[0][:200])
+                softplus_rr = protocol.insecure_Softplus('S', (dt-o)[0][:200])
+                print("softPlus_rr:\n", softplus_rr[:10])
+                print(F.softplus(dt[0][:200])[:10])
             y = selective_state_update(
                 ssm_state, x, dt, A, B, C, self.D, z=z, dt_bias=self.dt_proj.bias, dt_softplus=True
             )

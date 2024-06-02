@@ -73,6 +73,10 @@ class CipherMambaProtocol:
                 x = s.recv()
                 self.x = self.insecure_SiLU('C', input_array = x)
                 return msg, None
+            elif msg == 'Softplus':
+                x = s.recv()
+                self.x = self.insecure_Softplus('C', input_array = x)
+                return msg, None
             elif msg == 'break':
                 return msg, None
         else:
@@ -89,7 +93,7 @@ class CipherMambaProtocol:
                 self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
             elif message in ['linear_lmHead', 'conv']:
                 s.sendall(x)
-            elif message == 'SiLU':
+            elif message in ['SiLU', 'Softplus']:
                 s.sendall(x)
             return None
 
@@ -552,5 +556,65 @@ class CipherMambaProtocol:
             output = SiLU_C_mul*SiLU_S_mul
             output = torch.tensor(output, dtype=input_array.dtype, device=input_array.device)
             return output
+    def insecure_Softplus(self, role, input_array):
+        if role == 'C':
+            s = self.socket
+            self.ckks_c = CKKS()
+            s.sendall(self.ckks_c.pk.to_string())
+            s.sendall(self.ckks_c.rks.to_string())
+
+            length = 1
+            for i in input_array.shape:
+                length *= i
+
+            input_a_C = input_array.to('cpu')
+            input_cipher_exp_C = self.ckks_c.enc_array(torch.exp(input_a_C).reshape(length).numpy())
+            s.sendall(input_cipher_exp_C.to_string())
+
+            input_cipher_exp_C_str = s.recv()
+            input_cipher_exp_C = self.ckks_c.context.from_cipher_str(input_cipher_exp_C_str)
+
+            input_exp_C = self.ckks_c.dec_array(input_cipher_exp_C, length)
+            SoftPlus_C = torch.log(torch.tensor(input_exp_C))
+
+            s.sendall(SoftPlus_C)
+            return SoftPlus_C
+        else:
+            s = self.socket
+            pk = s.recv()
+            rks = s.recv()
+            self.ckks_s = CKKS(pk_str=pk, rks_str=rks)
+
+            length = 1
+            for i in input_array.shape:
+                length *= i
+
+            input_a_S = input_array.to('cpu')
+            input_plain_exp_S = self.ckks_s.encode.encode(torch.exp(input_a_S).reshape(length).numpy(),self.ckks_s.scale)
+            input_cipher_exp_C_str = s.recv()
+            input_cipher_exp_C = self.ckks_s.context.from_cipher_str(input_cipher_exp_C_str)
+            
+            ran2 = np.random.random(length)
+            ran2_plain_S = self.ckks_s.encode.encode(ran2, self.ckks_s.scale)
+
+            ones_plain_S = self.ckks_s.encode.encode(np.ones(length),self.ckks_s.scale)
+            ones_cipher_S = self.ckks_s.enc_array(np.ones(length))
+
+            self.ckks_s.eval.multiply_plain_inplace(input_cipher_exp_C, input_plain_exp_S)
+            self.ckks_s.eval.multiply_plain_inplace(ones_cipher_S, ones_plain_S)
+            self.ckks_s.eval.add_inplace(input_cipher_exp_C, ones_cipher_S)
+            self.ckks_s.ckks_mul_plain_inplace(input_cipher_exp_C, ran2_plain_S)
+            self.ckks_s.eval.rescale_to_next_inplace(input_cipher_exp_C)
+
+            s.sendall(input_cipher_exp_C.to_string())
+            ran2 = 1/ran2
+
+            Softplus_S = torch.log(torch.tensor(ran2))
+
+            SoftPlus_C = s.recv()
+
+            output = SoftPlus_C + Softplus_S
+            return output
+
 
 protocol = CipherMambaProtocol()
