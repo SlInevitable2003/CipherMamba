@@ -38,7 +38,7 @@ class CipherMambaProtocol:
         else:
             self.ckks_s = ckks
 
-    def synchronize(self, role, message=None, input_ids=None, token=None, x=None):
+    def synchronize(self, role, message=None, input_ids=None, token=None, x=None, y=None, str=None):
         if role == 'C':
             s = self.socket
             msg = s.recv()
@@ -77,6 +77,12 @@ class CipherMambaProtocol:
                 x = s.recv()
                 self.x = self.insecure_Softplus('C', input_array = x)
                 return msg, None
+            elif msg == 'einsum':
+                str = s.recv()
+                x = s.recv()
+                y = s.recv()
+                self.x = self.insecure_einsum('C', str, x, y)
+                return msg, None
             elif msg == 'break':
                 return msg, None
         else:
@@ -95,6 +101,10 @@ class CipherMambaProtocol:
                 s.sendall(x)
             elif message in ['SiLU', 'Softplus']:
                 s.sendall(x)
+            elif message == 'einsum':
+                s.sendall(str)
+                s.sendall(x)
+                s.sendall(y)
             return None
 
     embedding_first_time = True
@@ -615,6 +625,42 @@ class CipherMambaProtocol:
 
             output = SoftPlus_C + Softplus_S
             return output
+        
+    def insecure_einsum(self, role, str, dt, A):
+        if role == 'C':
+            s = self.socket
+            if str == "bd,dn->bdn":
+                dt_C = dt.unsqueeze(-1)
+                dt_C = dt_C.repeat(1,1,A.shape[1])
+                A_C = A.unsqueeze(0)
+                A_C = A_C.repeat(dt_C.shape[0], 1, 1)#bd,dn->bdn
+            elif str == "bd,bn->bdn":
+                dt_C = dt.unsqueeze(-1)
+                dt_C = dt_C.repeat(1,1,A_C.shape[1])
+                A_C = A.unsqueeze(1)
+                A_C = A_C.repeat(1,dt_C.shape[1],1)
+            else:
+                pass
+            return dt
+        else:
+            s = self.socket
+            if str == "bd,dn->bdn":
+                dt_S = dt.unsqueeze(-1)
+                dt_S = dt_S.repeat(1,1,A.shape[1])
+                A_S = A_S.unsqueeze(0)
+                A_S = A_S.repeat(dt_S.shape[0], 1, 1)#bd,dn->bdn
+            elif str == "bd,bn->bdn":
+                dt_S = dt.unsqueeze(-1)
+                dt_S = dt_S.repeat(1,1,A.shape[1])
+                A_S = A.unsqueeze(1)
+                A_S = A_S.repeat(1,dt_S.shape[1],1)
+            else:
+                pass
+            
+            einsum_S = dt * A + dt_S_plus_A_C_S.reshape(dt.shape[0], dt.shape[1], A.shape[1]) + ran_S.reshape(dt.shape[0], dt.shape[1], A.shape[1])
+            einsum_C = s.recv()
+            einsum_result = einsum_C + einsum_S
+            return  einsum_result
 
 
 protocol = CipherMambaProtocol()

@@ -283,6 +283,12 @@ class Mamba(nn.Module):
                 softplus_rr = protocol.insecure_Softplus('S', (dt-o)[0][:200])
                 print("softPlus_rr:\n", softplus_rr[:10])
                 print(F.softplus(dt[0][:200])[:10])
+                o = torch.ones_like(dt)
+                oA = torch.ones_like(A)
+                protocol.synchronize('S', message='einsum', x=o[0][:200], y=oA[:200], str="bd,dn->bdn")
+                einsum_rr = protocol.insecure_einsum('S', "bd,dn->bdn", (dt-o)[0][:200], (A-oA)[:200])
+                print("einsum:\n", einsum_rr[0][:10][:10])
+                print(torch.einsum("bd,dn->bdn", dt, A)[0][:10][:10])
             y = selective_state_update(
                 ssm_state, x, dt, A, B, C, self.D, z=z, dt_bias=self.dt_proj.bias, dt_softplus=True
             )
