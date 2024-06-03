@@ -304,7 +304,7 @@ class Mamba(nn.Module):
                 protocol.hidden_states += (torch.matmul(y_s, W.t().to('cpu')) >> 12)
                 out = protocol.hidden_states + protocol.socket.recv()
                 out = out.to(torch.double) / (1 << 12)
-                out = out.to(dtype=torch.float16, device='cuda')
+                out = out.to(dtype=torch.float16, device='cuda').unsqueeze(0)
             else:
                 out = self.out_proj(y)
             print('OutProj layer done.')
