@@ -56,6 +56,7 @@ class CipherMambaProtocol:
                 s.sendall(self.xz)
                 return msg, None
             elif msg == 'linear_lmHead':
+                self.hidden_states = self.hidden_states[-1:]
                 self.logits = self.insecure_matmul('C', X=self.hidden_states)
                 s.sendall(self.logits)
                 return msg, None
