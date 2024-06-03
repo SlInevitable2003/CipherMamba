@@ -6,7 +6,7 @@ excute:
 
 ```
 export HF_ENDPOINT=https://hf-mirror.com
-python cipher_mamba/server.py --topp 0.9 --temperature 0.7 --repetition-penalty 1.2
+python cipher_mamba/server.py --topp 0.9 --temperature 0.7 --repetition-penalty 1.2 > out.txt
 ```
 
 ### for client
@@ -16,7 +16,7 @@ excute:
 ```
 export HF_ENDPOINT=https://hf-mirror.com
 export TOKENIZERS_PARALLELISM=true
-python cipher_mamba/client.py
+python cipher_mamba/client.py < in.txt
 ```
 
 
