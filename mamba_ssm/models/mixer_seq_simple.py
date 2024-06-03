@@ -174,21 +174,36 @@ class MixerModel(nn.Module):
             hidden_states, residual = layer(
                 hidden_states, residual, inference_params=inference_params
             )
-        if not self.fused_add_norm:
-            residual = (hidden_states + residual) if residual is not None else hidden_states
-            hidden_states = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))
+        print('All layers done.')
+        print(hidden_states)
+        print(residual)
+        if options.use_secure_protocol == True:
+            protocol.synchronize(role='S', message='residual_plus')
+            gamma = self.norm_f.weight.to(torch.double) * (1 << 12)
+            gamma = gamma.to(dtype=torch.int64, device='cpu')
+            hidden_states, residual = protocol.insecure_rmsnorm(role='S', w=gamma, eps=self.norm_f.eps)
+            hidden_states = hidden_states.unsqueeze(0).to(torch.double) / (1 << 12)
+            hidden_states = hidden_states.to(dtype=torch.float16, device='cuda')
+            residual = residual.unsqueeze(0).to(torch.double) / (1 << 12)
+            residual = residual.to(dtype=torch.float16, device='cuda')
         else:
-            # Set prenorm=False here since we don't need the residual
-            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn
-            hidden_states = fused_add_norm_fn(
-                hidden_states,
-                self.norm_f.weight,
-                self.norm_f.bias,
-                eps=self.norm_f.eps,
-                residual=residual,
-                prenorm=False,
-                residual_in_fp32=self.residual_in_fp32,
-            )
+            if not self.fused_add_norm:
+                residual = (hidden_states + residual) if residual is not None else hidden_states
+                hidden_states = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))
+            else:
+                # Set prenorm=False here since we don't need the residual
+                fused_add_norm_fn = rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn
+                hidden_states = fused_add_norm_fn(
+                    hidden_states,
+                    self.norm_f.weight,
+                    self.norm_f.bias,
+                    eps=self.norm_f.eps,
+                    residual=residual,
+                    prenorm=False,
+                    residual_in_fp32=self.residual_in_fp32,
+                )
+        print('Last RMSNorm layer done.')
+        print(hidden_states)
         return hidden_states
 
 

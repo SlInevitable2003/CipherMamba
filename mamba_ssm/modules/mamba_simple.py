@@ -232,16 +232,20 @@ class Mamba(nn.Module):
                 protocol.synchronize('S', message='linear_xProj')
                 protocol.x_dbl = protocol.insecure_matmul('S', Y=W.t())
                 protocol.x_dbl += (torch.matmul(protocol.x, W.t().to('cpu')) >> 12)
-                x_dbl = protocol.x_dbl + protocol.socket.recv()
+                x_dbl_c = protocol.socket.recv()
+                x_dbl = protocol.x_dbl + x_dbl_c
                 x_dbl = x_dbl.to(torch.double) / (1 << 12)
                 x_dbl = x_dbl.to(dtype=torch.float16, device='cuda')
+                # x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))
+                # x_dbl_t = x_dbl.to(dtype=torch.double, device='cpu') * (1 << 12)
+                # x_dbl_t = x_dbl_t.to(torch.int64)
+                # protocol.x_dbl = x_dbl_t - x_dbl_c
 
                 protocol.dt, protocol.B, protocol.C = torch.split(protocol.x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
             else:
                 x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
             print('XProj layer done.')
             print(x_dbl)
-            if self.x_proj.bias is not None: print(f'Oh no! self.x_proj.bias = {self.x_proj.bias}')
 
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
 
@@ -251,9 +255,9 @@ class Mamba(nn.Module):
                 protocol.synchronize('S', message='linear_dtProj', x=[self.dt_rank, self.d_state])
                 dt_t = protocol.insecure_matmul('S', Y=W.t())
 
-                bias = self.dt_proj.bias.to(torch.double) * (1 << 12)
-                bias = bias.to(dtype=torch.int64, device='cpu')
-                protocol.dt = dt_t + (torch.matmul(protocol.dt, W.t().to('cpu')) >> 12) + bias
+                # bias = self.dt_proj.bias.to(torch.double) * (1 << 12)
+                # bias = bias.to(dtype=torch.int64, device='cpu')
+                protocol.dt = dt_t + (torch.matmul(protocol.dt, W.t().to('cpu')) >> 12)
                 dt = protocol.dt + protocol.socket.recv()
                 dt = dt.to(torch.double) / (1 << 12)
                 dt = dt.t().to(dtype=torch.float16, device='cuda') 
@@ -261,7 +265,6 @@ class Mamba(nn.Module):
                 dt = self.dt_proj.weight @ dt.t()
             print('DtProj layer done.')
             print(dt)
-            if self.dt_proj.bias is not None: print(f'Oh no! self.dt_proj.bias = {self.dt_proj.bias}')
 
             if options.use_secure_protocol == True and False:
                 pass
@@ -283,7 +286,7 @@ class Mamba(nn.Module):
                     return_last_state=ssm_state is not None,
                 )
             print('Selective scan done.')
-            print(y)
+            print(y[0])
             if ssm_state is not None:
                 y, last_state = y
                 ssm_state.copy_(last_state)
@@ -293,14 +296,14 @@ class Mamba(nn.Module):
                 W = self.out_proj.weight.to(torch.double) * (1 << 12)
                 W = W.to(torch.int64)
                 y_t = y.to(torch.double) * (1 << 12)
-                y_t = y.squeeze().to(torch.int64)
+                y_t = y_t.squeeze().to(dtype=torch.int64, device='cpu')
                 y_c = y_t >> 1
                 y_s = y_t - y_c
                 protocol.synchronize('S', message='linear_outProj', x=y_c)
                 protocol.hidden_states = protocol.insecure_matmul('S', Y=W.t())
                 protocol.hidden_states += (torch.matmul(y_s, W.t().to('cpu')) >> 12)
                 out = protocol.hidden_states + protocol.socket.recv()
-                out = out.to(torch.double) * (1 << 12)
+                out = out.to(torch.double) / (1 << 12)
                 out = out.to(dtype=torch.float16, device='cuda')
             else:
                 out = self.out_proj(y)
@@ -445,12 +448,6 @@ class Block(nn.Module):
             hidden_states = hidden_states.to(dtype=torch.float16, device='cuda')
             residual = residual.unsqueeze(0).to(torch.double) / (1 << 12)
             residual = residual.to(dtype=torch.float16, device='cuda')
-            # import copy
-            # residual = (hidden_states + residual) if residual is not None else hidden_states
-            # x_bar = residual.squeeze()
-            # rtsm = (torch.sum(x_bar * x_bar, dim=1) / 768 + self.norm.eps) ** (-0.5)
-            # x_hat = x_bar * rtsm.unsqueeze(0).t()
-            # hidden_states = x_hat.unsqueeze(0) * self.norm.weight
         else:
             if not self.fused_add_norm:
                 residual = (hidden_states + residual) if residual is not None else hidden_states

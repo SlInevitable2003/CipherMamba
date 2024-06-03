@@ -19,7 +19,6 @@ export TOKENIZERS_PARALLELISM=true
 python cipher_mamba/client.py < in.txt
 ```
 
-
 ### for test
 
 try this prompt:

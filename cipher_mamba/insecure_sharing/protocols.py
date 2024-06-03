@@ -13,7 +13,7 @@ class CipherOption:
         self.use_secure_protocol = True
 
 options = CipherOption()
-options.secure_protocol_set()
+# options.secure_protocol_set()
 
 class CipherMambaProtocol:
     def set_socket(self, s):
@@ -74,6 +74,7 @@ class CipherMambaProtocol:
                 x = s.recv()
                 self.hidden_states = self.insecure_matmul('C', X=x)
                 s.sendall(self.hidden_states)
+                return msg, None
             elif msg == 'conv':
                 self.x, self.z = self.xz.chunk(2, dim=1)
                 self.insecure_conv('C', X=F.pad(self.x.t(), (3, 3)))
@@ -216,6 +217,7 @@ class CipherMambaProtocol:
         
         if role == 'C':
             s = self.socket
+            # print(f'C goint to do matmul with X = {X}')
 
             m = X.shape[0]
             n = X.shape[1]
@@ -302,15 +304,16 @@ class CipherMambaProtocol:
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
                         nxt = next(ans_buffer)
-                        r = (-1) * torch.as_tensor(nxt[1])
+                        r = (-1) * (torch.as_tensor(nxt[1]) >> 12)
                         sum_ij += r
                     Z[i*m_w:(i+1)*m_w, j*k_w:(j+1)*k_w] = sum_ij
             Z = Z[0:m, 0:k]
 
-            return Z >> 12
+            return Z
 
         else:
             s = self.socket
+            # print(f'S goint to do matmul with Y = {Y}')
 
             n = Y.shape[0]
             k = Y.shape[1]
@@ -380,11 +383,11 @@ class CipherMambaProtocol:
                     for l in range(n_p):
                         Z_l = next(ans_buffer)
                         Z_l = torch.as_tensor(Z_l)
-                        sum_ij += Z_l
+                        sum_ij += (Z_l >> 12)
                     Z[i*m_w:(i+1)*m_w, j*k_w:(j+1)*k_w] = sum_ij
             Z = Z[0:m, 0:k]
 
-            return Z >> 12
+            return Z
 
     def insecure_conv(self, role, X=None, K=None):
         if role == 'C':
