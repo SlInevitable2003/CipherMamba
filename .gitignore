@@ -3,3 +3,7 @@
 build/
 **.so
 understand/
+
+in.txt
+ref_out.txt
+out.txt

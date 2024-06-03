@@ -134,13 +134,27 @@ class Mamba(nn.Module):
                 return out
 
         # We do matmul and transpose BLH -> HBL at the same time
-        xz = rearrange(
-            self.in_proj.weight @ rearrange(hidden_states, "b l d -> d (b l)"),
-            "d (b l) -> b d l",
-            l=seqlen,
-        )
-        if self.in_proj.bias is not None:
-            xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+        if options.use_secure_protocol == True:
+            W = self.in_proj.weight.to(torch.double) * (1 << 12)
+            W = W.to(torch.int64)
+            protocol.synchronize('S', message='linear_inProj')
+            protocol.xz = protocol.insecure_matmul('S', Y=W.t())
+            protocol.xz += (torch.matmul(protocol.hidden_states, W.t().to('cpu')) >> 12)
+            xz_c = protocol.socket.recv()
+            xz = xz_c + protocol.xz
+            xz = xz.to(torch.double) / (1 << 12)
+            xz = xz.to(dtype=torch.float16, device='cuda').t()
+            xz = xz.unsqueeze(0)
+        else:
+            xz = rearrange(
+                self.in_proj.weight @ rearrange(hidden_states, "b l d -> d (b l)"),
+                "d (b l) -> b d l",
+                l=seqlen,
+            )
+            if self.in_proj.bias is not None:
+                xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+        print('InProj layer done.')
+        print(xz)
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
@@ -164,22 +178,31 @@ class Mamba(nn.Module):
             import copy
             x, z = xz.chunk(2, dim=1)
             
-            if options.use_secure_protocol == True and False:
-                xx = copy.deepcopy(x)
-                xx = xx.squeeze().to(torch.double) * (1 << 12)
-                xx = xx.to(torch.int64)
+            if options.use_secure_protocol == True:
                 conv_kernel = self.conv1d.weight.squeeze().to(torch.double) * (1 << 12)
                 conv_kernel = conv_kernel.to(torch.int64)
-                conv_bias = self.conv1d.bias.unsqueeze(0).t()
                 
-                protocol.synchronize('S', message='conv', x=F.pad(xx, (3, 3)))
-                conv_res = protocol.insecure_conv('S', K=conv_kernel)
+                protocol.synchronize('S', message='conv')
+                conv_res = protocol.insecure_conv('S', K=conv_kernel) + protocol.socket.recv()
+                conv_res = conv_res.to(torch.double) / (1 << 12)
+                conv_res = conv_res.to(dtype=torch.float16, device='cuda').t()
 
-                conv_res = conv_res.to(torch.double) / (1 << 24)
-                conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
+                protocol.x, protocol.z = protocol.xz.chunk(2, dim=1)
+                x = protocol.x.t().unsqueeze(0).to(torch.double) / (1 << 12)
+                x = x.to(dtype=torch.float16, device='cuda')
+
+                x = self.conv1d(x)[..., :seqlen]
+                conv_res += x.squeeze()
+
                 silu_t = nn.SiLU()
                 conv_res = silu_t(conv_res).unsqueeze(0)
                 x = conv_res
+
+                x_s = x.squeeze().t().to(torch.double) * (1 << 12)
+                x_s = x_s.to(dtype=torch.int64, device='cpu')
+                x_c = x_s >> 1
+                protocol.socket.sendall(x_c)
+                protocol.x = x_s - x_c
             else:
                 # Compute short convolution
                 if conv_state is not None:
@@ -196,34 +219,94 @@ class Mamba(nn.Module):
                         bias=self.conv1d.bias,
                         activation=self.activation,
                     )
+            print('Regular convolution layer done.')
+            print(x)
 
             # We're careful here about the layout, to avoid extra transposes.
             # We want dt to have d as the slowest moving dimension
             # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
-            x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+
+            if options.use_secure_protocol == True:
+                W = self.x_proj.weight.to(torch.double) * (1 << 12)
+                W = W.to(torch.int64)
+                protocol.synchronize('S', message='linear_xProj')
+                protocol.x_dbl = protocol.insecure_matmul('S', Y=W.t())
+                protocol.x_dbl += (torch.matmul(protocol.x, W.t().to('cpu')) >> 12)
+                x_dbl = protocol.x_dbl + protocol.socket.recv()
+                x_dbl = x_dbl.to(torch.double) / (1 << 12)
+                x_dbl = x_dbl.to(dtype=torch.float16, device='cuda')
+
+                protocol.dt, protocol.B, protocol.C = torch.split(protocol.x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+            else:
+                x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+            print('XProj layer done.')
+            print(x_dbl)
+            if self.x_proj.bias is not None: print(f'Oh no! self.x_proj.bias = {self.x_proj.bias}')
+
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-            dt = self.dt_proj.weight @ dt.t()
-            dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
-            B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-            C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-            assert self.activation in ["silu", "swish"]
-            y = selective_scan_fn(
-                x,
-                dt,
-                A,
-                B,
-                C,
-                self.D.float(),
-                z=z,
-                delta_bias=self.dt_proj.bias.float(),
-                delta_softplus=True,
-                return_last_state=ssm_state is not None,
-            )
+
+            if options.use_secure_protocol == True:
+                W = self.dt_proj.weight.to(torch.double) * (1 << 12)
+                W = W.to(torch.int64)
+                protocol.synchronize('S', message='linear_dtProj', x=[self.dt_rank, self.d_state])
+                dt_t = protocol.insecure_matmul('S', Y=W.t())
+
+                bias = self.dt_proj.bias.to(torch.double) * (1 << 12)
+                bias = bias.to(dtype=torch.int64, device='cpu')
+                protocol.dt = dt_t + (torch.matmul(protocol.dt, W.t().to('cpu')) >> 12) + bias
+                dt = protocol.dt + protocol.socket.recv()
+                dt = dt.to(torch.double) / (1 << 12)
+                dt = dt.t().to(dtype=torch.float16, device='cuda') 
+            else:
+                dt = self.dt_proj.weight @ dt.t()
+            print('DtProj layer done.')
+            print(dt)
+            if self.dt_proj.bias is not None: print(f'Oh no! self.dt_proj.bias = {self.dt_proj.bias}')
+
+            if options.use_secure_protocol == True and False:
+                pass
+            else:
+                dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
+                B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+                C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+                assert self.activation in ["silu", "swish"]
+                y = selective_scan_fn(
+                    x,
+                    dt,
+                    A,
+                    B,
+                    C,
+                    self.D.float(),
+                    z=z,
+                    delta_bias=self.dt_proj.bias.float(),
+                    delta_softplus=True,
+                    return_last_state=ssm_state is not None,
+                )
+            print('Selective scan done.')
+            print(y)
             if ssm_state is not None:
                 y, last_state = y
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
-            out = self.out_proj(y)
+
+            if options.use_secure_protocol == True:
+                W = self.out_proj.weight.to(torch.double) * (1 << 12)
+                W = W.to(torch.int64)
+                y_t = y.to(torch.double) * (1 << 12)
+                y_t = y.squeeze().to(torch.int64)
+                y_c = y_t >> 1
+                y_s = y_t - y_c
+                protocol.synchronize('S', message='linear_outProj', x=y_c)
+                protocol.hidden_states = protocol.insecure_matmul('S', Y=W.t())
+                protocol.hidden_states += (torch.matmul(y_s, W.t().to('cpu')) >> 12)
+                out = protocol.hidden_states + protocol.socket.recv()
+                out = out.to(torch.double) * (1 << 12)
+                out = out.to(dtype=torch.float16, device='cuda')
+            else:
+                out = self.out_proj(y)
+            print('OutProj layer done.')
+            print(out)
+            if self.out_proj.bias is not None: print(f'Oh no! self.out_proj.bias = {self.out_proj.bias}')
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -353,15 +436,21 @@ class Block(nn.Module):
         """
         from cipher_mamba.insecure_sharing.protocols import protocol, options
 
-        if options.use_secure_protocol == True and False:
+        if options.use_secure_protocol == True:
             protocol.synchronize(role='S', message='residual_plus')
             gamma = self.norm.weight.to(torch.double) * (1 << 12)
             gamma = gamma.to(dtype=torch.int64, device='cpu')
-            hidden_states, residual = protocol.insecure_rmsnorm(role='S', w=gamma, eps=1e-5)
-            hidden_states = hidden_states.to(torch.double) / (1 << 12)
-            hidden_states = hidden_states.to(torch.float16)
-            residual = residual.to(torch.double) / (1 << 12)
-            residual = residual.to(torch.float16)
+            hidden_states, residual = protocol.insecure_rmsnorm(role='S', w=gamma, eps=self.norm.eps)
+            hidden_states = hidden_states.unsqueeze(0).to(torch.double) / (1 << 12)
+            hidden_states = hidden_states.to(dtype=torch.float16, device='cuda')
+            residual = residual.unsqueeze(0).to(torch.double) / (1 << 12)
+            residual = residual.to(dtype=torch.float16, device='cuda')
+            # import copy
+            # residual = (hidden_states + residual) if residual is not None else hidden_states
+            # x_bar = residual.squeeze()
+            # rtsm = (torch.sum(x_bar * x_bar, dim=1) / 768 + self.norm.eps) ** (-0.5)
+            # x_hat = x_bar * rtsm.unsqueeze(0).t()
+            # hidden_states = x_hat.unsqueeze(0) * self.norm.weight
         else:
             if not self.fused_add_norm:
                 residual = (hidden_states + residual) if residual is not None else hidden_states
@@ -379,6 +468,10 @@ class Block(nn.Module):
                     residual_in_fp32=self.residual_in_fp32,
                     eps=self.norm.eps,
                 )
+        print('Residual plus done.')
+        print(hidden_states)
+        print(residual)
+        
         hidden_states = self.mixer(hidden_states, inference_params=inference_params)
         return hidden_states, residual
 

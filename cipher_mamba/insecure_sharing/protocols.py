@@ -7,14 +7,10 @@ from cipher_mamba.insecure_sharing.multi_processing import MultiProcessing
 from insecure_sharing.seal import *
 
 class CipherOption:
-    use_secure_protocol = True
-    use_secure_protocol_embedding = False
+    use_secure_protocol = False
     
-    def secure_protocol_set(self, **kwargs):
+    def secure_protocol_set(self):
         self.use_secure_protocol = True
-
-        if kwargs.get('embedding') is not None:
-            self.use_secure_protocol_embedding = kwargs['embedding']
 
 options = CipherOption()
 options.secure_protocol_set()
@@ -36,6 +32,7 @@ class CipherMambaProtocol:
             msg = s.recv()
             if msg == 'embedding':
                 self.insecure_embedding('C', input_ids=input_ids)
+                s.sendall(self.hidden_states)
                 return msg, None
             elif msg == 'ahe s2c':
                 pk_str = s.recv()
@@ -53,13 +50,35 @@ class CipherMambaProtocol:
             elif msg == 'residual_plus':
                 self.residual = self.residual + self.hidden_states
                 self.insecure_rmsnorm(role='C')
+                return msg, None
+            elif msg == 'linear_inProj':
+                self.xz = self.insecure_matmul('C', X=self.hidden_states)
+                s.sendall(self.xz)
+                return msg, None
             elif msg == 'linear_lmHead':
                 x = s.recv()
                 self.logits = self.insecure_matmul('C', X=x)
                 return msg, None
-            elif msg == 'conv':
+            elif msg == 'linear_xProj':
+                self.x_dbl = self.insecure_matmul('C', X=self.x)
+                s.sendall(self.x_dbl)
+                return msg, None
+            elif msg == 'linear_dtProj':
+                dt_rank = s.recv()
+                d_state = s.recv()
+                self.dt, self.B, self.C = torch.split(self.x_dbl, [dt_rank, d_state, d_state], dim=-1)
+                self.dt = self.insecure_matmul('C', X=self.dt)
+                s.sendall(self.dt)
+                return msg, None
+            elif msg == 'linear_outProj':
                 x = s.recv()
-                self.x = self.insecure_conv('C', X=x)
+                self.hidden_states = self.insecure_matmul('C', X=x)
+                s.sendall(self.hidden_states)
+            elif msg == 'conv':
+                self.x, self.z = self.xz.chunk(2, dim=1)
+                self.insecure_conv('C', X=F.pad(self.x.t(), (3, 3)))
+                s.sendall(self.x)
+                self.x = s.recv()
                 return msg, None
             elif msg == 'break':
                 return msg, None
@@ -75,8 +94,11 @@ class CipherMambaProtocol:
                 pk_str = s.recv()
                 rks_str = s.recv()
                 self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
-            elif message in ['linear_lmHead', 'conv']:
+            elif message in ['linear_lmHead', 'linear_outProj']: # to be remove
                 s.sendall(x)
+            elif message == 'linear_dtProj':
+                s.sendall(x[0])
+                s.sendall(x[1])
             return None
 
     embedding_first_time = True
@@ -99,7 +121,7 @@ class CipherMambaProtocol:
             r = torch.randn((n, m)).to(torch.double) * (1 << 12)
             r = r.to(torch.int32)
             for i, j in enumerate(ids.tolist()):
-                line = self.Enc_Ws[j]
+                line = self.ahe_s.context.from_cipher_str(self.Enc_Ws[j].to_string())
                 rdm = r[i].tolist()
                 line = self.ahe_s.ahe_add_plain(line, rdm, is_list=True)
                 Enc_ws.append(line)
@@ -110,9 +132,6 @@ class CipherMambaProtocol:
             self.hidden_states = (-1) * r
             self.residual = torch.zeros_like(self.hidden_states).to(torch.int32)
 
-            # insecure reveal
-
-            s.sendall(self.hidden_states)
             self.embedding_first_time = False
             return None
         else:
@@ -121,11 +140,10 @@ class CipherMambaProtocol:
             s.sendall(k)
             s.sendall(m)
             
-            print('')
+            # print('')
             if self.embedding_first_time == True:
                 lines = [W[i].tolist() for i in range(k)]
                 target = lambda lst : protocol.ahe_s.enc_list(lst).to_string()
-                print('processes creating...')
 
                 processes = MultiProcessing(target=target, args=lines, granularity=32)
                 processes.start()
@@ -133,7 +151,7 @@ class CipherMambaProtocol:
 
                 line_idx = 0
                 for i in processes.ret_buffer():
-                    print(f'\r[{line_idx}] going to send...', end='')
+                    # print(f'\r[{line_idx}] going to send...', end='')
                     s.sendall(i, already_bstr=True)
                     line_idx += 1
 
@@ -146,12 +164,8 @@ class CipherMambaProtocol:
             self.hidden_states = w_plus_r
             self.residual = torch.zeros_like(self.hidden_states).to(torch.int32)
 
-            # insecure reveal
-
-            x = s.recv()
-            x = x + self.hidden_states
             self.embedding_first_time = False
-            return x
+            return self.hidden_states
 
     def insecure_rmsnorm(self, role, w=None, eps=None):
         if role == 'C':
@@ -172,7 +186,7 @@ class CipherMambaProtocol:
             org_res = copy.deepcopy(residual)
             real_res = copy.deepcopy(org_res)
             residual = torch.sum(residual * residual, dim=1) >> 12
-            residual = residual.to(torch.double) / (m * (1 << 12))
+            residual = residual.to(torch.double) / (m << 12)
             residual += eps
             residual = residual ** (-0.5)
             residual = residual * (1 << 12)
@@ -282,20 +296,18 @@ class CipherMambaProtocol:
             s.sendall(b'OK')
             s.recv()
 
-            Z = torch.zeros((m_p * m_w, k_p * k_w))
+            Z = torch.zeros((m_p * m_w, k_p * k_w)).to(torch.int64)
             for i in range(m_p):
                 for j in range(k_p):
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
                         nxt = next(ans_buffer)
-                        r = torch.as_tensor(nxt[1])
+                        r = (-1) * torch.as_tensor(nxt[1])
                         sum_ij += r
                     Z[i*m_w:(i+1)*m_w, j*k_w:(j+1)*k_w] = sum_ij
             Z = Z[0:m, 0:k]
 
-            # insecure revealing
-            s.sendall(Z)
-            return Z
+            return Z >> 12
 
         else:
             s = self.socket
@@ -313,7 +325,7 @@ class CipherMambaProtocol:
             # optimization version since tensor operation is used instead of iteration
             target = lambda ijl : self.ahe_s.enc_list(Y[ijl[2]*n_w:(ijl[2]+1)*n_w, ijl[1]*k_w:(ijl[1]+1)*k_w].t().flatten().tolist()).to_string()
             args = [[i, j, l] for i in range(m_p) for j in range(k_p) for l in range(n_p)]
-            processes = MultiProcessing(target=target, args=args, granularity=32, show_process=False)
+            processes = MultiProcessing(target=target, args=args, granularity=32)
             processes.start()
             processes.join()
 
@@ -359,11 +371,11 @@ class CipherMambaProtocol:
 
             s.sendall(b'OK')
 
-            print('')
-            Z = torch.zeros((m_p * m_w, k_p * k_w))
+            # print('')
+            Z = torch.zeros((m_p * m_w, k_p * k_w)).to(torch.int64)
             for i in range(m_p):
                 for j in range(k_p):
-                    print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
+                    # print(f'\rmatmul process: {int((i * k_p + j) * 100 / (m_p * k_p))}%', end='')
                     sum_ij = torch.zeros((m_w, k_w))
                     for l in range(n_p):
                         Z_l = next(ans_buffer)
@@ -372,11 +384,7 @@ class CipherMambaProtocol:
                     Z[i*m_w:(i+1)*m_w, j*k_w:(j+1)*k_w] = sum_ij
             Z = Z[0:m, 0:k]
 
-            # insecure revealing
-
-            ZZ = s.recv()
-            Z = Z + ZZ
-            return Z
+            return Z >> 12
 
     def insecure_conv(self, role, X=None, K=None):
         if role == 'C':
@@ -401,7 +409,7 @@ class CipherMambaProtocol:
                 piz_coeff = [0] * (m_w * n_w * k_w)
                 for i in range(m_w):
                     for j in range(k_w):
-                        piz_coeff[i * n_w * k_w + (j + 1) * n_w - 1] = r[i][j].item()
+                        piz_coeff[i * n_w * k_w + (j + 1) * n_w - 1] = (-1) * r[i][j].item()
                 
                 return [pix_coeff, piz_coeff, r.tolist()]
 
@@ -414,7 +422,7 @@ class CipherMambaProtocol:
             piz_lst = [x[1] for x in pix_piz_r_lst]
             r_lst = [x[2] for x in pix_piz_r_lst]
             self.x = torch.as_tensor(r_lst).squeeze()
-            self.x = self.x[:, 0 : n].t()
+            self.x = self.x[:, 0 : n].t() >> 12
 
             del pix_piz_r_lst
             
@@ -434,10 +442,6 @@ class CipherMambaProtocol:
             
             for i in processes.ret_buffer():
                 s.sendall(i, already_bstr=True)
-
-            # insecure revealing
-
-            s.sendall(self.x)
 
         else:
             s = self.socket
@@ -482,12 +486,8 @@ class CipherMambaProtocol:
             processes.join()
 
             self.x = torch.as_tensor([x for x in processes.ret_buffer()]).squeeze()
-            self.x = self.x[:, 0 : n].t()
+            self.x = self.x[:, 0 : n].t() >> 12
 
-            # insecure revealing
-
-            x = s.recv()
-            x += self.x
-            return x.t()
+            return self.x
 
 protocol = CipherMambaProtocol()

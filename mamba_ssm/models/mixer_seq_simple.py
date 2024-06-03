@@ -159,12 +159,15 @@ class MixerModel(nn.Module):
             W = W.to(torch.double)
             W = W.squeeze() * (1 << 12)
             W = W.to(torch.int32)
-            hidden_states = protocol.insecure_embedding('S', W=W).to(torch.double)
+            hidden_states = protocol.insecure_embedding('S', W=W) + protocol.socket.recv()
+            hidden_states = hidden_states.to(torch.double)
             hidden_states = hidden_states.unsqueeze(0).to('cuda')
             hidden_states = hidden_states / (1 << 12)
             hidden_states = hidden_states.to(torch.float16)
         else:
             hidden_states = self.embedding(input_ids)
+        print('Embedding layer done.')
+        print(hidden_states)
 
         residual = None
         for layer in self.layers:
@@ -251,21 +254,21 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
         if num_last_tokens > 0:
             hidden_states = hidden_states[:, -num_last_tokens:]
         
-        if options.use_secure_protocol == True and False:
+        if options.use_secure_protocol == True:
             x = hidden_states.squeeze(0).to(torch.double) * (1 << 12)
             x = x.to(torch.int64)
             W = self.lm_head.weight.to(torch.double) * (1 << 12)
             W = W.to(torch.int64)
             protocol.synchronize('S', message='linear_lmHead', x=x)
             protocol.logits = protocol.insecure_matmul('S', Y=W.t())
-            my_logits = protocol.logits.to(torch.double) / (1 << 24)
+            my_logits = protocol.logits.to(torch.double) / (1 << 12)
             my_logits = my_logits.to(dtype=torch.float16, device='cuda')
             lm_logits = my_logits.unsqueeze(0)
-
-            print(lm_logits)
-            print(self.lm_head(hidden_states))
         else:
             lm_logits = self.lm_head(hidden_states)
+        print('LmHead layer done.')
+        print(lm_logits)
+        while True: pass
         
         CausalLMOutput = namedtuple("CausalLMOutput", ["logits"])
         return CausalLMOutput(logits=lm_logits)
