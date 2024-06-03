@@ -274,9 +274,11 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
             x = x.to(torch.int64)
             W = self.lm_head.weight.to(torch.double) * (1 << 12)
             W = W.to(torch.int64)
-            protocol.synchronize('S', message='linear_lmHead', x=x)
+            protocol.synchronize('S', message='linear_lmHead')
             protocol.logits = protocol.insecure_matmul('S', Y=W.t())
-            my_logits = protocol.logits.to(torch.double) / (1 << 12)
+            protocol.logits += (torch.matmul(protocol.hidden_states, W.t().to('cpu')) >> 12)
+            my_logits = protocol.logits + protocol.socket.recv()
+            my_logits = my_logits.to(torch.double) / (1 << 12)
             my_logits = my_logits.to(dtype=torch.float16, device='cuda')
             lm_logits = my_logits.unsqueeze(0)
         else:

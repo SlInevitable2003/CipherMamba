@@ -13,7 +13,7 @@ class CipherOption:
         self.use_secure_protocol = True
 
 options = CipherOption()
-# options.secure_protocol_set()
+options.secure_protocol_set()
 
 class CipherMambaProtocol:
     def set_socket(self, s):
@@ -56,8 +56,8 @@ class CipherMambaProtocol:
                 s.sendall(self.xz)
                 return msg, None
             elif msg == 'linear_lmHead':
-                x = s.recv()
-                self.logits = self.insecure_matmul('C', X=x)
+                self.logits = self.insecure_matmul('C', X=self.hidden_states)
+                s.sendall(self.logits)
                 return msg, None
             elif msg == 'linear_xProj':
                 self.x_dbl = self.insecure_matmul('C', X=self.x)
@@ -95,7 +95,7 @@ class CipherMambaProtocol:
                 pk_str = s.recv()
                 rks_str = s.recv()
                 self.ahe_c = AHE(pk_str=pk_str, rks_str=rks_str)
-            elif message in ['linear_lmHead', 'linear_outProj']: # to be remove
+            elif message in ['linear_outProj']: # to be remove
                 s.sendall(x)
             elif message == 'linear_dtProj':
                 s.sendall(x[0])
