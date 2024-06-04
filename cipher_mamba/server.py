@@ -61,7 +61,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             input_ids = connn.recv()
             protocol.create_ahe(role="S")
             protocol.synchronize('S', message='ahe s2c')
-            # protocol.synchronize('S', message='ahe c2s')
+            protocol.synchronize('S', message='ahe c2s')
 
             # inference
             max_length = input_ids.shape[1] + args.genlen
@@ -98,3 +98,4 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             # torch.cuda.synchronize()
             print(f"Prompt length: {len(input_ids[0])}, generation length: {len(out_sequences[0]) - len(input_ids[0])}")
             print(f"{args.model_name} prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
+            break

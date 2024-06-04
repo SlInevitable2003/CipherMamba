@@ -87,7 +87,19 @@ def sample(logits, top_k=1, top_p=0.0, min_p=0.0, temperature=1.0):
         logits: Tensor of shape (batch_size, vocab_size)
     """
     if top_k == 1:  # Short-circuit for greedy decoding
+        protocol.logits = logits[:,:2000].detach().clone().to(torch.float64)
+        protocol.logits *= (1<<22)
+        protocol.logits = protocol.logits.to(torch.int64)
+        protocol.synchronize(role='S', message='argmax')
+        max_index = protocol.secure_argmax('S')
+        m = logits[:,:2000].argmax(dim=-1)
+        # print("secure argmax",max_index)
+        # print("torch argmax",m)
+        # if max_index[0] != m[0]:
+        #     print("compare",logits[0][max_index[0]], logits[0][m[0]])
         return logits.argmax(dim=-1)
+        #protocal.secure_suffle()
+        #protocal.secure_argmax()
     else:
         if top_p > 0.0:
             assert top_p <= 1.0, "top-p should be in (0, 1]."

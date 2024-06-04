@@ -165,7 +165,7 @@ class Mamba(nn.Module):
             x, z = xz.chunk(2, dim=1)
             
             conv_res = copy.deepcopy(x)
-            if options.use_secure_protocol == True:
+            if options.use_secure_protocol == True and False:
                 xx = copy.deepcopy(x)
                 xx = xx.squeeze().to(torch.double) * (1 << 12)
                 xx = xx.to(torch.int64)
@@ -203,9 +203,9 @@ class Mamba(nn.Module):
                         bias=self.conv1d.bias,
                         activation=self.activation,
                     )
-            print(x)
-            print(conv_res)
-            x = conv_res
+            # print(x)
+            # print(conv_res)
+            # x = conv_res
 
             # We're careful here about the layout, to avoid extra transposes.
             # We want dt to have d as the slowest moving dimension

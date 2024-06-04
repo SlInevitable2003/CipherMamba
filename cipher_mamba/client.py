@@ -36,3 +36,4 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             msg, ret = protocol.synchronize('C', input_ids=input_ids)
 
         print("")
+        break

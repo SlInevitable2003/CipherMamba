@@ -83,6 +83,11 @@ class CipherMambaProtocol:
                 y = s.recv()
                 self.x = self.insecure_einsum('C', str, x, y)
                 return msg, None
+            elif msg == 'argmax':
+                shape = s.recv()
+                self.logits = torch.zeros(shape)
+                self.secure_argmax('C')
+                return msg, None
             elif msg == 'break':
                 return msg, None
         else:
@@ -105,6 +110,8 @@ class CipherMambaProtocol:
                 s.sendall(str)
                 s.sendall(x)
                 s.sendall(y)
+            elif message == 'argmax':
+                s.sendall(self.logits.shape)
             return None
 
     embedding_first_time = True
@@ -729,6 +736,83 @@ class CipherMambaProtocol:
             einsum_C = s.recv()
             einsum_result = einsum_C + einsum_S
             return  einsum_result
+        
+    def secure_argmax(self, role):
+        def choose(selector, choices):
+            return np.array([choices[idx] for idx in selector])
+        if role == 'C':
+            s = self.socket
+            pk = s.recv()
+            rks = s.recv()
+            self.ckks_c = CKKS(pk_str=pk, rks_str=rks)
+            length = 1
+            for i in self.logits.shape:
+                length *= i
+            a = self.logits.detach().clone().to('cpu').reshape(length).numpy()
+            r_index = np.array(range(length))
+            while(a.shape[-1]!=1):
+                diff_array = np.diff(a)
+                #切片多进程
+                # diff_array_s = s.recv()
+                # diff_array+=diff_array_s
+                diff_enc_str = s.recv()
+                diff_enc = self.ckks_c.context.from_cipher_str(diff_enc_str)
+                self.ckks_c.ckks_add_plain_inplace(diff_enc, diff_array, is_array=True)
+
+                ran = torch.randint(100,500,diff_array.shape).numpy()
+                self.ckks_c.ckks_mul_plain_inplace(diff_enc, ran, is_array=True)
+                s.sendall(diff_enc.to_string())
+                # diff_array *= ran
+                # s.sendall(diff_array)
+            
+                result_index = s.recv()
+                a = choose(result_index,a)
+                r_index = choose(result_index,r_index)
+            return 0
+
+        else:
+            s = self.socket
+            self.ckks_s = CKKS()
+            s.sendall(self.ckks_s.pk.to_string())
+            s.sendall(self.ckks_s.rks.to_string())
+            length = 1
+            for i in self.logits.shape:
+                length *= i
+            a = self.logits.detach().clone().to('cpu').reshape(length).numpy()
+            r_index = np.array(range(length))
+            while(a.shape[-1]!=1):
+                diff_array = np.diff(a)
+                #切片多进程
+                d_p_r = []
+                diff_enc = self.ckks_s.enc_array(diff_array)
+                # s.sendall(diff_array)
+                s.sendall(diff_enc.to_string())
+
+                diff_plus_ran_cipher_str = s.recv()
+                diff_plus_ran_cipher = self.ckks_s.context.from_cipher_str(diff_plus_ran_cipher_str)
+                diff_plus_ren = self.ckks_s.dec_array(diff_plus_ran_cipher, a.shape[-1]-1)
+                # diff_array_c = s.recv()
+                #多进程结果拼接
+                d_p_r += diff_plus_ren.tolist()
+                # print(d_p_r[:10])
+                result_index = []
+                if d_p_r[0]<=0:
+                    result_index.append(0)
+                for i in range(a.shape[-1]-2):
+                    if d_p_r[i]>0 and d_p_r[i+1]<=0:
+                        result_index.append(i+1)
+                if d_p_r[-1]>0:
+                    result_index.append(a.shape[-1]-1)
+                s.sendall(result_index)
+                # print(len(result_index))
+                # print(result_index)
+                a = choose(result_index,a)
+                r_index = choose(result_index,r_index)
+            return r_index
+
+            
+
+
 
 
 protocol = CipherMambaProtocol()
