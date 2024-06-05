@@ -95,10 +95,10 @@ def sample(logits, top_k=1, top_p=0.0, min_p=0.0, temperature=1.0):
         max_index = protocol.secure_argmax('S')
         print("sample time:",(time.time()-start)*1000, "ms")#13*0.6s
         m = logits[:,:4000].argmax(dim=-1)
-        # print("secure argmax",max_index)
-        # print("torch argmax",m)
-        # if max_index[0] != m[0]:
-        #     print("compare",logits[0][max_index[0]], logits[0][m[0]])
+        print("secure argmax",max_index)
+        print("torch argmax",m)
+        if max_index[0] != m[0]:
+            print("compare",logits[0][max_index[0]], logits[0][m[0]])
         return logits.argmax(dim=-1)
         #protocal.secure_suffle()
         #protocal.secure_argmax()

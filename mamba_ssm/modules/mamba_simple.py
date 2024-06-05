@@ -166,7 +166,7 @@ class Mamba(nn.Module):
             x, z = xz.chunk(2, dim=1)
             
             conv_res = copy.deepcopy(x)
-            if options.use_secure_protocol == True:
+            if options.use_secure_protocol == True and False:
                 xx = copy.deepcopy(x)
                 xx = xx.squeeze().to(torch.double) * (1 << 12)
                 xx = xx.to(torch.int64)
@@ -280,7 +280,7 @@ class Mamba(nn.Module):
             y = y + self.D.to(dtype) * x
             y = y * self.act(z)  # (B D)
         else:
-            if True:
+            if True and False:
                 start = time.time()
                 print(dt.shape)
                 o = torch.ones_like(dt)
