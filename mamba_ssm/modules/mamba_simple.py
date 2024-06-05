@@ -2,6 +2,7 @@
 
 import math
 from typing import Optional
+import time
 
 import torch
 import torch.nn as nn
@@ -165,7 +166,7 @@ class Mamba(nn.Module):
             x, z = xz.chunk(2, dim=1)
             
             conv_res = copy.deepcopy(x)
-            if options.use_secure_protocol == True and False:
+            if options.use_secure_protocol == True:
                 xx = copy.deepcopy(x)
                 xx = xx.squeeze().to(torch.double) * (1 << 12)
                 xx = xx.to(torch.int64)
@@ -179,12 +180,15 @@ class Mamba(nn.Module):
                 conv_res = conv_res.to(torch.double) / (1 << 24)
                 conv_res = conv_res.to(dtype=torch.float16, device='cuda') + conv_bias
                 silu_t = nn.SiLU()
-                if False:
+                if True:
+                    start = time.time()
+                    print(conv_res.shape)
                     o = torch.ones_like(conv_res)#don`t need
                     protocol.synchronize('S', message='SiLU', x=o[:200])
                     silu_rr = protocol.insecure_SiLU('S', (conv_res-o)[:200])
-                    print("silu:\n",silu_rr.reshape(200,3)[:10])
-                    print(silu_t(conv_res[:200])[:10])
+                    print("SiLU time:",(time.time()-start)*1000,"ms")#0.09s*8
+                    print("silu:\n",silu_rr.reshape(200,14)[:1])
+                    print(silu_t(conv_res[:200])[:1])
                 conv_res = silu_t(conv_res).unsqueeze(0) 
                 # x = conv_res
             if True:
@@ -276,19 +280,24 @@ class Mamba(nn.Module):
             y = y + self.D.to(dtype) * x
             y = y * self.act(z)  # (B D)
         else:
-            if False:
+            if True:
+                start = time.time()
+                print(dt.shape)
                 o = torch.ones_like(dt)
                 print(o.shape)
                 protocol.synchronize('S', message='Softplus', x=o[0][:200])
                 softplus_rr = protocol.insecure_Softplus('S', (dt-o)[0][:200])
+                print("Softplus time:",(time.time()-start)*1000,"ms")#0.1s
                 print("softPlus_rr:\n", softplus_rr[:10])
                 print(F.softplus(dt[0][:200])[:10])
+                start = time.time()
                 o = torch.ones_like(dt)
                 # print("o:\n",o.shape)
                 oA = torch.ones_like(A)
                 # print(oA.shape)
                 protocol.synchronize('S', message='einsum', x=o, y=oA[:,:2], str="bd,dn->bdn")
                 einsum_rr = protocol.insecure_einsum('S', "bd,dn->bdn", dt-o, (A-oA)[:,:2])
+                print("einsum time:",(time.time()-start)*1000,"ms")#0.3s
                 print("einsum:\n", einsum_rr[0][:10][:2])
                 print(torch.einsum("bd,dn->bdn", dt, A)[0][:10][:2])
             y = selective_state_update(

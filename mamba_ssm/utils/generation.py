@@ -87,12 +87,14 @@ def sample(logits, top_k=1, top_p=0.0, min_p=0.0, temperature=1.0):
         logits: Tensor of shape (batch_size, vocab_size)
     """
     if top_k == 1:  # Short-circuit for greedy decoding
-        protocol.logits = logits[:,:2000].detach().clone().to(torch.float64)
+        start = time.time()
+        protocol.logits = logits[:,:4000].detach().clone().to(torch.float64)
         protocol.logits *= (1<<22)
         protocol.logits = protocol.logits.to(torch.int64)
         protocol.synchronize(role='S', message='argmax')
         max_index = protocol.secure_argmax('S')
-        m = logits[:,:2000].argmax(dim=-1)
+        print("sample time:",(time.time()-start)*1000, "ms")#13*0.6s
+        m = logits[:,:4000].argmax(dim=-1)
         # print("secure argmax",max_index)
         # print("torch argmax",m)
         # if max_index[0] != m[0]:
