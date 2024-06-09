@@ -1,0 +1,42 @@
+模型运行环境需配置mamba-ssm依赖和python-seal库
+mamba-ssm依赖配置如下：
+	conda create -n your_env_name python=3.10.13
+	conda activate your_env_name
+	conda install cudatoolkit==11.8 -c nvidia
+	pip install torch==2.1.1 torchvision==0.16.1 torchaudio==2.1.1 --index-url 	https://download.pytorch.org/whl/cu118
+	conda install -c "nvidia/label/cuda-11.8.0" cuda-nvcc
+	conda install packaging
+	pip install causal-conv1d==1.1.1  # 版本号根据实际情况选择，或者不指定直接安装最新
+python-seal库配置如下：
+	（https://github.com/Huelse/SEAL-Python）
+	# Optional
+	sudo apt-get install git build-essential cmake python3 python3-dev python3-pip
+
+	# Get the repository or download from the releases
+	git clone https://github.com/Huelse/SEAL-Python.git
+	cd SEAL-Python
+
+	# Install dependencies
+	pip3 install numpy pybind11
+
+	# Init the SEAL and pybind11
+	git submodule update --init --recursive
+	# Get the newest repositories (dev only)
+	# git submodule update --remote
+
+	# Build the SEAL lib without the msgsl zlib and zstandard compression
+	cd SEAL
+	cmake -S . -B build -DSEAL_USE_MSGSL=OFF -DSEAL_USE_ZLIB=OFF -DSEAL_USE_ZSTD=OFF
+	cmake --build build
+	cd ..
+
+	# Run the setup.py, the dynamic library will be generated in the current directory
+	python3 setup.py build_ext -i
+
+	# Test
+	cp seal.*.so examples
+	cd examples
+	python3 4_bgv_basics.py
+	
+	# Run project
+	执行完成后进入CipherMamba文件夹按照Readma执行文件即可运行。
