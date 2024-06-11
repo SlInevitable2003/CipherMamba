@@ -39,4 +39,4 @@ python-seal库配置如下：
 	python3 4_bgv_basics.py
 	
 	# Run project
-	执行完成后进入CipherMamba文件夹按照Readme执行文件即可运行。
+	执行完成后进入cipher_mamba文件夹按照Readme执行文件即可运行。
